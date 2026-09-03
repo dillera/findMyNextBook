@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>findMyNextBook</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">📚 <span>findMyNextBook</span></div>
+  <nav>
+    <button data-view="library" class="active">Library</button>
+    <button data-view="stats">Stats</button>
+    <button data-view="recs">Next Book</button>
+    <button data-view="owned">Owned on Kindle</button>
+    <button data-view="add">Add</button>
+  </nav>
+  <div class="topbar-right">
+    <span id="enrich-status" class="muted"></span>
+    <button id="enrich-btn" class="ghost" title="Fetch covers, blurbs and genres from Google Books">Enrich from Google</button>
+    <label class="ghost file-btn">Import CSV<input type="file" id="import-file" accept=".csv" hidden></label>
+  </div>
+</header>
+
+<!-- ===================== LIBRARY ===================== -->
+<section id="view-library" class="view">
+  <div class="filters">
+    <input id="q" type="search" placeholder="Search title, author, blurb…">
+    <div class="seg star-seg" title="Quick filter by my rating">
+      <button data-star="5">★★★★★</button>
+      <button data-star="4">★★★★</button>
+      <button data-star="3">★★★</button>
+    </div>
+    <select id="f-shelf">
+      <option value="">All shelves</option>
+      <option value="read">Read</option>
+      <option value="currently-reading">Currently reading</option>
+      <option value="to-read">To read</option>
+      <option value="abandoned">Abandoned</option>
+    </select>
+    <select id="f-rating">
+      <option value="">Any rating</option>
+      <option value="5">★★★★★</option>
+      <option value="4">★★★★</option>
+      <option value="3">★★★</option>
+      <option value="2">★★</option>
+      <option value="1">★</option>
+      <option value="0">Unrated</option>
+    </select>
+    <select id="f-author"><option value="">All authors</option></select>
+    <select id="f-sort">
+      <option value="date_added:desc">Newest added</option>
+      <option value="date_read:desc">Recently read</option>
+      <option value="my_rating:desc">My rating</option>
+      <option value="google_rating:desc">Google rating</option>
+      <option value="title:asc">Title A–Z</option>
+      <option value="author:asc">Author A–Z</option>
+      <option value="original_year:desc">Newest published</option>
+      <option value="original_year:asc">Oldest published</option>
+      <option value="pages:desc">Longest</option>
+    </select>
+    <div class="seg">
+      <button data-layout="grid" class="active" title="Grid">▦</button>
+      <button data-layout="list" title="List">☰</button>
+    </div>
+    <span id="count" class="muted"></span>
+  </div>
+  <div id="books" class="grid"></div>
+</section>
+
+<!-- ===================== STATS ===================== -->
+<section id="view-stats" class="view" hidden>
+  <div id="stat-tiles" class="tiles"></div>
+  <div class="charts">
+    <figure class="card"><figcaption>Books read per year</figcaption><div id="chart-year"></div></figure>
+    <figure class="card"><figcaption>How I rate (read shelf)</figcaption><div id="chart-rating"></div></figure>
+    <figure class="card"><figcaption>Most-read authors · avg rating</figcaption><div id="chart-authors"></div></figure>
+    <figure class="card"><figcaption>Genres (Google Books categories) · avg rating</figcaption><div id="chart-cats"></div></figure>
+  </div>
+</section>
+
+<!-- ===================== RECOMMENDATIONS ===================== -->
+<section id="view-recs" class="view" hidden>
+  <div class="card rec-controls">
+    <div class="row">
+      <label>Model <input id="rec-model" list="model-list" placeholder="anthropic/claude-sonnet-5" spellcheck="false"></label>
+      <datalist id="model-list"></datalist>
+      <label>How many <input id="rec-n" type="number" min="3" max="25" value="10"></label>
+      <button id="rec-go" class="primary">✨ Find my next book</button>
+      <button id="rec-prompt" class="ghost" title="See exactly what gets sent to the model">View prompt</button>
+    </div>
+    <div class="row">
+      <input id="rec-mood" placeholder="Optional steer — e.g. “something short and weird”, “more like Blindsight”, “no series starters”">
+    </div>
+    <div id="rec-status" class="muted"></div>
+  </div>
+  <div class="row runs-row">
+    <label>Previous runs <select id="run-select"></select></label>
+    <label class="check"><input type="checkbox" id="hide-dismissed" checked> hide dismissed</label>
+  </div>
+  <p id="taste" class="taste"></p>
+  <div id="recs" class="rec-list"></div>
+</section>
+
+<!-- ===================== OWNED ===================== -->
+<section id="view-owned" class="view" hidden>
+  <div class="card owned-card">
+    <h2 style="margin:0 0 4px">Owned on Kindle <span id="owned-count" class="muted" style="font-size:14px;font-weight:400"></span></h2>
+    <p class="muted" style="margin:0">Books you bought on Amazon that Goodreads never saw. Anything on this list is never recommended.</p>
+    <h3 style="margin:16px 0 4px">👇 Paste here</h3>
+    <div class="row" style="margin-top:12px;align-items:flex-start">
+      <div style="flex:1 1 320px">
+        <textarea id="owned-text" placeholder="Paste titles, one per line — “The Gone-Away World by Nick Harkaway” or just the title.&#10;Also accepts the JSON the Kindle-library script copies to your clipboard."></textarea>
+        <div class="row" style="margin-top:6px">
+          <button id="owned-add" class="small primary">Add to owned</button>
+          <label class="file-btn small" style="padding:3px 9px;font-size:12px">Upload Amazon export CSV<input type="file" id="owned-file" accept=".csv,.txt,.json,.tsv" hidden></label>
+          <button id="owned-clear" class="small ghost danger">Clear list</button>
+        </div>
+      </div>
+      <div style="flex:1 1 320px;font-size:12.5px" class="muted">
+        <b>Fastest way to load your whole Kindle library:</b><br>
+        1. Open <a href="https://read.amazon.com/kindle-library" target="_blank" rel="noopener">read.amazon.com/kindle-library</a> and sign in.<br>
+        2. Open the browser console (⌥⌘J in Chrome) and paste this, then press Enter. It scrolls to the bottom, collects every title, and copies JSON to your clipboard.<br>
+        <pre id="kindle-script" style="white-space:pre-wrap;user-select:all;background:var(--bg);padding:8px;border-radius:6px;font-size:11px;margin:6px 0"></pre>
+        3. Paste the result into the box on the left and click <i>Add to owned</i>.<br>
+        <br><b>Or</b> Amazon → Account → <a href="https://www.amazon.com/hz/privacy-central/data-requests/preview.html" target="_blank" rel="noopener">Request Your Data</a> → “Digital Content” gives CSVs you can upload here.
+      </div>
+    </div>
+    <div id="owned-list" class="tags" style="margin-top:10px;max-height:160px;overflow:auto"></div>
+  </div>
+</section>
+
+<!-- ===================== ADD ===================== -->
+<section id="view-add" class="view" hidden>
+  <div class="card">
+    <div class="row">
+      <input id="g-q" placeholder="Search Google Books — title, author, or isbn:9780…" autofocus>
+      <button id="g-go" class="primary">Search</button>
+    </div>
+    <p class="muted">Adds go straight to your shelves. No Goodreads required.</p>
+  </div>
+  <div id="g-results" class="rec-list"></div>
+</section>
+
+<!-- ===================== DRAWER ===================== -->
+<div id="backdrop" hidden></div>
+<aside id="drawer" hidden>
+  <button id="drawer-close" class="close" aria-label="Close">×</button>
+  <div id="drawer-body"></div>
+</aside>
+
+<div id="modal" hidden><div class="modal-inner"><button class="close" id="modal-close">×</button><pre id="modal-pre"></pre></div></div>
+<div id="tip" class="tip" hidden></div>
+<div id="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
