@@ -2,7 +2,7 @@
 // files never receives anything (see the Content-Security-Policy in index.html and the Privacy panel).
 import * as store from "./store.js";
 import * as imp from "./importers.js";
-import { isKnown, keyOf } from "./match.js";
+import { authorKey, bookAuthors, cleanTitle, isKnown, keyOf, seriesKey, seriesOf } from "./match.js";
 import * as gb from "./books-api.js";
 import * as llm from "./llm.js";
 import * as rec from "./recommend.js";
@@ -15,8 +15,15 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const plural = (n, one, many = one + "s") => `${(n ?? 0).toLocaleString()} ${n === 1 ? one : many}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function toast(msg, ms = 2800) {
-  const t = $("#toast"); t.textContent = msg; t.hidden = false;
+function toast(msg, ms = 2800, action = null) {
+  const t = $("#toast"); t.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "toast-act"; b.type = "button"; b.textContent = action.label;
+    b.onclick = () => { t.hidden = true; action.fn(); };
+    t.append(b);
+  }
+  t.hidden = false;
   clearTimeout(t._t); t._t = setTimeout(() => (t.hidden = true), ms);
 }
 
@@ -62,7 +69,8 @@ function download(name, text) {
 }
 
 /* ---------- status: one snapshot feeds the banner, the hero line, the chips and the header ---------- */
-const S = { status: null, layout: "grid", shelf: "all", tracking: false, showDismissed: false, run: null };
+const S = { status: null, layout: "grid", shelf: "all", tracking: false, showDismissed: false, run: null,
+  visible: [], selecting: false, selected: new Set(), authorName: null };
 function computeStatus() {
   const books = store.all("books"), ledger = store.all("kindle");
   const shelves = {};
@@ -125,7 +133,9 @@ document.addEventListener("click", (e) => {
 /* ---------- navigation ---------- */
 const views = { discover: loadDiscover, library: loadLibrary, insights: loadInsights };
 function show(name) {
+  if (name.startsWith("author/")) { showAuthorView(decodeURIComponent(name.slice(7))); return; }
   if (!views[name]) name = "discover";
+  document.title = "findMyNextBook";
   $$(".view").forEach((v) => (v.hidden = v.id !== `view-${name}`));
   $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   if (location.hash.slice(1) !== name) history.replaceState(null, "", `#${name}`);
@@ -368,7 +378,7 @@ function recCard(r) {
   return `<article class="rec st-${r.status}" data-id="${esc(r.id)}">
     <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${cover(r)}</a>
     <div>
-      <div class="rec-top"><span class="rank">${r.rank}</span><div><h3>${esc(r.title)}</h3><div class="byline">${[esc(r.author), r.year].filter(Boolean).join(" · ")}</div></div></div>
+      <div class="rec-top"><span class="rank">${r.rank}</span><div><h3>${esc(r.title)}</h3><div class="byline">${[r.author ? `<span class="author-link" data-author="${esc(r.author)}">${esc(r.author)}</span>` : "", r.year].filter(Boolean).join(" · ")}</div></div></div>
       ${r.hook ? `<p class="hook">${esc(r.hook)}</p>` : ""}
       <p class="reason">${esc(r.reason || "")}</p>
       ${r.description ? `<p class="blurb" title="Click to expand">${esc(r.description)}</p>` : ""}
@@ -454,10 +464,14 @@ function loadBooks() {
     return c * sign || a.title.localeCompare(b.title);
   });
   $("#lib-count").textContent = list.length.toLocaleString();
+  S.visible = list.map((b) => b.id);
+  const visible = new Set(S.visible);
+  for (const id of S.selected) if (!visible.has(id)) S.selected.delete(id);
+  renderBulk();
   const el = $("#books");
-  el.className = S.layout;
-  el.innerHTML = list.map((b) => `<div class="book" data-id="${b.id}" tabindex="0">${cover(b)}
-      <div class="t">${esc(b.title)}</div><div class="a">${esc(b.author || "Unknown author")}</div>
+  el.className = S.layout + (S.selecting ? " selecting" : "");
+  el.innerHTML = list.map((b) => `<div class="book${S.selected.has(b.id) ? " sel" : ""}" data-id="${b.id}" tabindex="0">${S.selecting ? `<span class="pick-box" aria-hidden="true">✓</span>` : ""}${cover(b)}
+      <div class="t">${esc(b.title)}</div><div class="a">${b.author ? `<span class="author-link" data-author="${esc(b.author)}">${esc(b.author)}</span>` : "Unknown author"}</div>
       <div class="meta">${b.my_rating ? stars(b.my_rating) : `<span class="tag ${b.exclusive_shelf}">${SHELF[b.exclusive_shelf] || esc(b.exclusive_shelf)}</span>`}
         ${S.layout === "list" && b.asin ? `<span class="tag">Kindle</span>` : ""}<span class="d">${esc((b.date_read || "").slice(0, 10))}</span></div></div>`).join("")
     || `<div class="empty" style="grid-column:1/-1"><h3>${S.status?.books ? "Nothing matches" : "Your library is empty"}</h3>${S.status?.books ? "Try another search or filter." : `<button class="btn primary" data-wizard style="margin-top:12px">Import your books</button>`}</div>`;
@@ -465,11 +479,85 @@ function loadBooks() {
 let qTimer;
 $("#q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(loadBooks, 150); });
 ["#f-rating", "#f-sort"].forEach((s) => $(s).addEventListener("change", loadBooks));
-$$(".seg button").forEach((b) => b.addEventListener("click", () => {
-  S.layout = b.dataset.layout; $$(".seg button").forEach((x) => x.classList.toggle("active", x === b)); loadBooks();
+$$(".seg button[data-layout]").forEach((b) => b.addEventListener("click", () => {
+  S.layout = b.dataset.layout; $$(".seg button[data-layout]").forEach((x) => x.classList.toggle("active", x === b)); loadBooks();
 }));
-$("#books").addEventListener("click", (e) => { const c = e.target.closest(".book"); if (c) openBook(+c.dataset.id); });
-$("#books").addEventListener("keydown", (e) => { const c = e.target.closest(".book"); if (c && e.key === "Enter") openBook(+c.dataset.id); });
+function toggleSelect(card) {
+  const id = +card.dataset.id;
+  if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id);
+  card.classList.toggle("sel", S.selected.has(id));
+  renderBulk();
+}
+$("#books").addEventListener("click", (e) => { const c = e.target.closest(".book"); if (c) S.selecting ? toggleSelect(c) : openBook(+c.dataset.id); });
+$("#books").addEventListener("keydown", (e) => {
+  const c = e.target.closest(".book"); if (!c) return;
+  if (e.key === "Enter" || (S.selecting && e.key === " ")) { e.preventDefault(); S.selecting ? toggleSelect(c) : openBook(+c.dataset.id); }
+});
+
+/* ---------- bulk changes: everything the filter shows, or the books you select ---------- */
+const MOVE_TO = [["read", "Read"], ["to-read", "Want to read"], ["currently-reading", "Reading"], ["abandoned", "Abandoned"]];
+const BULK = {
+  read: { change: (b) => (b.exclusive_shelf === "read" ? null : { exclusive_shelf: "read" }), say: (n) => `${plural(n, "book")} marked read` },
+  move: (shelf) => ({ change: (b) => (b.exclusive_shelf === shelf ? null : { exclusive_shelf: shelf }),
+    say: (n) => `${plural(n, "book")} moved to ${MOVE_TO.find(([v]) => v === shelf)[1].toLowerCase()}` }),
+  // a rating means you read it: rated books that aren't on "read" count for nothing in your taste profile
+  rate: (v) => ({ change: (b) => (v ? (b.my_rating === v && b.exclusive_shelf === "read" ? null : { my_rating: v, exclusive_shelf: "read" }) : b.my_rating ? { my_rating: 0 } : null),
+    say: (n) => (v ? `${plural(n, "book")} rated ${"★".repeat(v)} (and marked read)` : `Rating cleared on ${plural(n, "book")}`) }),
+};
+/** Apply one change to many books, with Undo. The changed books are marked edited, so a Goodreads re-import keeps them. */
+async function bulkUpdate(ids, { change, say }) {
+  const ts = store.now(), before = [], changed = [];
+  for (const id of ids) {
+    const b = store.get("books", id); if (!b) continue;
+    const patch = change(b); if (!patch) continue;
+    before.push({ id: b.id, exclusive_shelf: b.exclusive_shelf, my_rating: b.my_rating, edited: b.edited, updated_at: b.updated_at });
+    Object.assign(b, patch, { edited: true, updated_at: ts });
+    changed.push(b);
+  }
+  if (!changed.length) { toast("Nothing to change: they're all like that already"); return; }
+  await store.putMany("books", changed);
+  afterBulk();
+  toast(say(changed.length), 9000, { label: "Undo", fn: async () => {
+    await store.putMany("books", before.map((o) => Object.assign(store.get("books", o.id), o)));
+    afterBulk(); toast("Undone");
+  } });
+}
+function afterBulk() { refresh(); if (!$("#view-library").hidden) loadBooks(); if (!$("#view-author").hidden) renderAuthor(); }
+
+function renderBulk() {
+  const el = $("#bulk"), n = S.visible.length, k = S.selected.size;
+  const filtered = S.shelf !== "all" || $("#q").value.trim() || $("#f-rating").value;
+  if (!n && !S.selecting) { el.hidden = true; return; }
+  el.hidden = false;
+  const off = S.selecting && !k ? "disabled" : "";
+  const rateSel = (label) => `<select data-bulk="rate" ${off} aria-label="${label}" title="Rating a book also marks it read"><option value="">${label}</option>
+    ${[5, 4, 3, 2, 1].map((v) => `<option value="${v}">${"★".repeat(v)}</option>`).join("")}<option value="0">Clear rating</option></select>`;
+  const moveSel = (label) => `<select data-bulk="move" ${off} aria-label="${label}"><option value="">${label}</option>
+    ${MOVE_TO.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>`;
+  el.innerHTML = S.selecting
+    ? `<span class="bk-count"><b>${k.toLocaleString()}</b> of ${n.toLocaleString()} selected</span>
+       ${k < n ? `<button class="btn sm ghost" data-bulk="all">Select all ${n.toLocaleString()}</button>` : ""}${k ? `<button class="btn sm ghost" data-bulk="none">Clear</button>` : ""}
+       <span class="spacer"></span>
+       <button class="btn sm primary" data-bulk="read" ${off}>Mark read</button>${rateSel("Rate…")}${moveSel("Move to…")}
+       <button class="btn sm" data-bulk="done">Done</button>`
+    : `<span class="bk-count">${filtered ? `${plural(n, "book")} match` : ""}</span><span class="spacer"></span>
+       ${filtered ? `<button class="btn sm primary" data-bulk="read-all">Mark all ${n.toLocaleString()} read</button>${rateSel(`Rate all ${n.toLocaleString()}…`)}${moveSel(`Move all ${n.toLocaleString()} to…`)}` : ""}
+       <button class="btn sm" data-bulk="select">Select books…</button>`;
+}
+const bulkTargets = () => (S.selecting ? [...S.selected] : [...S.visible]);
+$("#bulk").addEventListener("click", async (e) => {
+  const a = e.target.closest("button[data-bulk]")?.dataset.bulk; if (!a) return;
+  if (a === "select") { S.selecting = true; S.selected.clear(); loadBooks(); }
+  else if (a === "done") { S.selecting = false; S.selected.clear(); loadBooks(); }
+  else if (a === "all") { S.visible.forEach((id) => S.selected.add(id)); loadBooks(); }
+  else if (a === "none") { S.selected.clear(); loadBooks(); }
+  else if (a === "read" || a === "read-all") await bulkUpdate(bulkTargets(), BULK.read);
+});
+$("#bulk").addEventListener("change", async (e) => {
+  const sel = e.target.closest("select[data-bulk]"); if (!sel || sel.value === "") return;
+  const v = sel.value; sel.value = "";
+  await bulkUpdate(bulkTargets(), sel.dataset.bulk === "rate" ? BULK.rate(+v) : BULK.move(v));
+});
 
 /* ---------- drawer ---------- */
 function openBook(id) { const b = store.get("books", id); if (!b) return; renderDrawer(b); $("#drawer").hidden = false; $("#backdrop").hidden = false; }
@@ -483,7 +571,7 @@ function renderDrawer(b) {
     <div class="dhead">${cover(b)}
       <div>
         <h2>${esc(b.title)}</h2>
-        <div class="byline"><span class="author-link" data-author="${esc(b.author || "")}" title="Show their books">${esc(b.author || "Unknown author")}</span>${b.additional_authors ? ", " + esc(b.additional_authors) : ""}</div>
+        <div class="byline"><span class="author-link" data-author="${esc(b.author || "")}" title="All their books, by series">${esc(b.author || "Unknown author")}</span>${b.additional_authors ? ", " + esc(b.additional_authors) : ""}</div>
         <div class="big-stars" id="rate">${[1, 2, 3, 4, 5].map((i) => `<span data-v="${i}" class="${i <= (b.my_rating || 0) ? "on" : ""}">★</span>`).join("")}</div>
         <div class="hint">${b.my_rating ? "Click the same star to clear" : "Not rated yet"}</div>
         <div class="dactions">
@@ -516,6 +604,7 @@ function renderDrawer(b) {
     await store.put("books", b);
     if (!quiet) toast("Saved");
     if (!$("#view-library").hidden) loadBooks();
+    if (!$("#view-author").hidden) renderAuthor();
     refresh();
   };
   const rate = $("#rate");
@@ -528,7 +617,6 @@ function renderDrawer(b) {
     if (nv && b.exclusive_shelf !== "read") Object.assign(f, { exclusive_shelf: "read", date_read: b.date_read || store.now().slice(0, 10) });
     await patch(f); renderDrawer(b);
   });
-  $(".author-link").onclick = (e) => { closeDrawer(); S.shelf = "all"; $("#q").value = e.target.dataset.author; show("library"); };
   $("#shelf").onchange = async (e) => {
     const f = { exclusive_shelf: e.target.value };
     if (f.exclusive_shelf === "read" && !b.date_read) f.date_read = store.now().slice(0, 10);
@@ -546,6 +634,128 @@ function renderDrawer(b) {
     await store.del("books", b.id); closeDrawer(); loadBooks(); refresh(); toast("Removed");
   };
 }
+
+/* ================================================================================================
+   AUTHOR PAGE: every book you have by them, each series in its own block
+   ================================================================================================ */
+// any author name, anywhere, opens their page (capture phase: before a card's own click handler)
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-author]");
+  if (!a?.dataset.author || (S.selecting && a.closest("#books"))) return;
+  e.preventDefault(); e.stopPropagation();
+  openAuthor(a.dataset.author);
+}, true);
+function openAuthor(name) {
+  closeDrawer();
+  for (const o of $$(".overlay")) if (!o.hidden && o.id !== "wizard") closeOverlay(o);
+  history.pushState(null, "", `#author/${encodeURIComponent(name)}`);
+  showAuthorView(name);
+  window.scrollTo(0, 0);
+}
+function showAuthorView(name) {
+  refresh();
+  $$(".view").forEach((v) => (v.hidden = v.id !== "view-author"));
+  $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === "library"));
+  renderAuthor(name);
+}
+const shortTitle = (t) => cleanTitle(t).replace(/\s*\([^()]*\d\)\s*$/, "") || t;
+const yearOf = (b) => b.original_year || b.year_published || +(b.google_published || "").slice(0, 4) || null;
+function bookTile(b, label = null, extra = "", title = shortTitle(b.title)) {
+  const status = b.my_rating ? stars(b.my_rating) : `<span class="tag ${b.exclusive_shelf}">${SHELF[b.exclusive_shelf] || esc(b.exclusive_shelf)}</span>`;
+  return `<div class="book${b.exclusive_shelf === "read" ? " is-read" : ""}${extra}" data-id="${b.id}" tabindex="0">${label != null ? `<span class="snum">#${esc(label)}</span>` : ""}${cover(b)}
+    <div class="t">${esc(title)}</div><div class="meta">${status}${yearOf(b) ? `<span class="d">${yearOf(b)}</span>` : ""}</div></div>`;
+}
+function renderAuthor(name = S.authorName) {
+  S.authorName = name;
+  const key = authorKey(name);
+  const books = store.all("books").filter((b) => bookAuthors(b).some((a) => a.key === key));
+  const spellings = new Map();
+  for (const b of books) for (const a of bookAuthors(b)) if (a.key === key) spellings.set(a.name, (spellings.get(a.name) || 0) + 1);
+  const who = [...spellings].sort((a, b) => b[1] - a[1])[0]?.[0] || name;
+  document.title = `${who} · findMyNextBook`;
+  const read = books.filter((b) => b.exclusive_shelf === "read"), rated = books.filter((b) => b.my_rating > 0);
+  const avg = rated.length ? rated.reduce((s, b) => s + b.my_rating, 0) / rated.length : null;
+
+  const groups = new Map(), solo = [];
+  for (const b of books) {
+    const s = seriesOf(b.title);
+    if (!s) { solo.push(b); continue; }
+    if (!groups.has(s.key)) groups.set(s.key, { key: s.key, names: new Map(), items: [] });
+    const g = groups.get(s.key);
+    g.names.set(s.name, (g.names.get(s.name) || 0) + 1);
+    g.items.push({ b, s });
+  }
+  // "The Skinner (Spatterjay)": the series named without a number, when another book of theirs numbers it
+  for (const b of [...solo]) {
+    const paren = (b.title.match(/\(([^()\d]+)\)\s*$/) || [])[1];
+    const g = paren && groups.get(seriesKey(paren));
+    if (!g) continue;
+    solo.splice(solo.indexOf(b), 1);
+    g.items.push({ b, s: { name: paren.trim(), key: g.key, num: Infinity, label: null }, title: b.title.replace(/\s*\([^()]*\)\s*$/, "") });
+  }
+  const series = [...groups.values()].map((g) => {
+    g.name = [...g.names].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0];
+    g.items.sort((x, y) => x.s.num - y.s.num || x.b.title.localeCompare(y.b.title));
+    g.year = Math.min(...g.items.map((i) => yearOf(i.b) || 9999));
+    // whole-numbered entries you don't have: "#3" between #2 and #4, or #1 when you start at #2 (omnibuses cover their range)
+    const have = new Set();
+    for (const { s } of g.items) {
+      if (!s.label) continue; // unnumbered
+      const [lo, hi] = s.label.split("–").map(Number);
+      if (Number.isInteger(lo)) for (let n = lo; n <= (Number.isInteger(hi) ? hi : lo); n++) have.add(n);
+    }
+    const max = Math.max(0, ...have);
+    // gaps only when every book is numbered: an unnumbered one may well be the "missing" #2
+    g.missing = max <= 40 && g.items.every((i) => i.s.label) ? Array.from({ length: max }, (_, i) => i + 1).filter((n) => !have.has(n)) : [];
+    g.unread = g.items.filter((i) => i.b.exclusive_shelf !== "read").map((i) => i.b.id);
+    return g;
+  }).sort((a, b) => a.year - b.year || a.name.localeCompare(b.name));
+  solo.sort((a, b) => (yearOf(a) || 9999) - (yearOf(b) || 9999) || a.title.localeCompare(b.title));
+
+  const kindleFor = (q) => rec.kindleSearch(q, who);
+  const seriesBlock = (g) => {
+    const total = g.items.length, done = total - g.unread.length;
+    // in reading order, with the gaps as tiles you can go and buy
+    const entries = [...g.items.map((i) => ({ num: i.s.num, html: (next) => bookTile(i.b, i.s.label, next ? " next" : "", i.title), read: i.b.exclusive_shelf === "read" })),
+      ...g.missing.map((n) => ({ num: n, missing: true, html: (next) => `<a class="book missing${next ? " next" : ""}" href="${kindleFor(`${g.name} book ${n}`)}" target="_blank" rel="noopener noreferrer">
+        <span class="snum">#${n}</span><div class="cover gap"><span>#${n}</span><small>not found in your library</small></div>
+        <div class="t">${esc(g.name)} #${n}</div><div class="meta"><span class="tag">Find on Kindle ↗</span></div></a>` }))].sort((a, b) => a.num - b.num);
+    // up next: the first book you haven't read (or don't have) after the furthest one you have read
+    const furthest = Math.max(0, ...entries.filter((x) => x.read && Number.isFinite(x.num)).map((x) => x.num));
+    let nextIdx = entries.findIndex((x) => Number.isFinite(x.num) && x.num > furthest && (x.missing || !x.read));
+    if (nextIdx < 0) nextIdx = entries.findIndex((x) => !x.missing && !x.read);
+    const status = !g.unread.length && !g.missing.length ? `<span class="series-done">✓ All read</span>`
+      : `${done} of ${total} read${g.missing.length ? ` · #${g.missing.join(", #")} not found in your library` : ""}`;
+    return `<section class="series-block">
+      <header class="series-head">
+        <div class="sh-text"><h2>${esc(g.name)}</h2><div class="sh-sub">${status}</div></div>
+        <div class="sh-bar" title="${done} of ${total + g.missing.length} read"><span style="width:${Math.round((done / (total + g.missing.length)) * 100)}%"></span></div>
+        ${g.unread.length ? `<button class="btn sm" data-series-read="${esc(g.key)}">Mark all ${g.unread.length} read</button>` : ""}
+      </header>
+      <div class="grid series-books">${entries.map((x, i) => x.html(i === nextIdx)).join("")}</div>
+    </section>`;
+  };
+
+  $("#author-body").innerHTML = `
+    <div class="author-head">
+      <button class="btn sm ghost" data-author-back>← Back</button>
+      <h1>${esc(who)}</h1>
+      <div class="author-stats">${books.length ? `${plural(books.length, "book")} in your library · ${read.length.toLocaleString()} read${avg ? ` · your average ${avg.toFixed(1)}★` : ""}${series.length ? ` · ${series.length} series` : ""}` : "No books by them in your library yet."}</div>
+      <a class="btn sm" href="${kindleFor("")}" target="_blank" rel="noopener noreferrer">More by ${esc(who)} on Kindle ↗</a>
+    </div>
+    ${series.map(seriesBlock).join("")}
+    ${solo.length ? `<section class="series-block solo"><header class="series-head"><div class="sh-text"><h2>${series.length ? "Other books" : "Books"}</h2>
+      <div class="sh-sub">${solo.filter((b) => b.exclusive_shelf === "read").length} of ${solo.length} read</div></div></header>
+      <div class="grid series-books">${solo.map((b) => bookTile(b)).join("")}</div></section>` : ""}`;
+  S.authorSeries = new Map(series.map((g) => [g.key, g.unread]));
+}
+$("#author-body").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-author-back]")) { history.length > 1 ? history.back() : show("library"); return; }
+  const sr = e.target.closest("[data-series-read]");
+  if (sr) { await bulkUpdate(S.authorSeries.get(sr.dataset.seriesRead) || [], BULK.read); return; }
+  const c = e.target.closest(".book[data-id]"); if (c) openBook(+c.dataset.id);
+});
+$("#author-body").addEventListener("keydown", (e) => { const c = e.target.closest(".book[data-id]"); if (c && e.key === "Enter") openBook(+c.dataset.id); });
 
 /* ---------- add a book ---------- */
 $("#add-book").addEventListener("click", () => { openOverlay("#adder"); setTimeout(() => $("#g-q").focus(), 50); });
@@ -613,6 +823,7 @@ function loadInsights() {
   $("#chart-rating").innerHTML = vbars([1, 2, 3, 4, 5].map((r) => ({ label: "★".repeat(r), n: s.ratings[r] || 0 })), "label", "n")
     + `<p class="muted small" style="margin:6px 0 0">${plural(s.ratings[0] || 0, "read book")} unrated.</p>`;
   $("#chart-authors").innerHTML = s.authors.length ? hbars(s.authors, "author", "n", "avg_rating") : `<p class="muted">Nothing read yet.</p>`;
+  $$("#chart-authors .hbar .n").forEach((n, i) => { n.dataset.author = s.authors[i].author; n.classList.add("author-link"); });
   $("#chart-cats").innerHTML = s.categories.length ? hbars(s.categories, "name", "n", "avg") : `<p class="muted">Genres appear once book details have been fetched (Settings).</p>`;
   attachTips($("#view-insights"));
 }

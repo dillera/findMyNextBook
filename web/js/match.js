@@ -146,6 +146,66 @@ export class BookIndex {
   }
 }
 
+/* ---------- authors and series, for the author page ---------- */
+
+/** One key per person however the name is written: "Watts, Peter" = "Peter Watts", "J.R.R. Tolkien" = "J. R. R. Tolkien". */
+export function authorKey(name) {
+  let a = (name || "").trim().replace(/:+$/, "");
+  const parts = a.split(",");
+  if (parts.length === 2 && parts[1].trim() && !/^\s*(jr|sr|ii|iii|iv)\.?\s*$/i.test(parts[1])) a = `${parts[1]} ${parts[0]}`;
+  const toks = a.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+  const out = [];
+  let initials = false; // run initials together, so "j r r" and "jrr" agree
+  for (const t of toks) {
+    if (t.length === 1 && initials) out[out.length - 1] += t;
+    else out.push(t);
+    initials = t.length === 1 || (initials && t.length === 1);
+  }
+  return out.join(" ");
+}
+
+/** Everyone credited on a book: the author field (Kindle separates several with ";") and Goodreads' additional authors. */
+export function bookAuthors(b) {
+  const names = (b.author || "").split(";").concat((b.additional_authors || "").split(/,(?![^,]*,)|;/).filter((x) => x.trim()))
+    .map((n) => authorName(n.trim())).filter(Boolean);
+  const seen = new Set();
+  return names.map((name) => ({ name, key: authorKey(name) })).filter((a) => a.key && !seen.has(a.key) && seen.add(a.key));
+}
+
+const NUMWORD = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const SERIES_WORDS = /\s+(series|trilogy|duology|saga|sequence|cycle|chronicles|novels|books|universe|collection)$/;
+/** "Children of Time" / "The Children of Time Series" → the same key */
+export const seriesKey = (name) => {
+  let k = (name || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim().replace(/^the\s+/, "");
+  while (SERIES_WORDS.test(k)) k = k.replace(SERIES_WORDS, "");
+  return k;
+};
+
+/** The series a title names, if any:
+ *   Goodreads  "Children of Ruin (Children of Time, #2)", "The Expanse Box Set (The Expanse, #1-3)"
+ *   Amazon     "Children of Ruin (Children of Time Book 2)", "Wool (Silo, Book 1)", "(Book 2 of the Foo Series)"
+ *  → {name, key, num, label}, or null. num is for sorting; label is what to show ("2", "1–3", "0.5"). */
+export function seriesOf(title) {
+  const groups = [...(title || "").matchAll(/\(([^()]+)\)/g)].map((m) => m[1]).reverse();
+  for (const g of groups) {
+    const seg = g.split(";")[0].trim();
+    // the first "Name #N" in the group: "Agent Cormac #1, Polity Universe #3" is Agent Cormac #1
+    let m = seg.match(/^\s*([^#;]+?)\s*,?\s*#\s*(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?(?=\s*(?:,|$))/);
+    if (!m) m = seg.match(/^(.+?)[,:]?\s+(?:Book|Volume|Vol\.?|Part|Novel)\s+(\d+(?:\.\d+)?|[a-z]+)(?:\s*[-–]\s*(\d+))?(?:\s+of\s+\d+)?$/i);
+    if (!m) { const r = seg.match(/^(?:Book|Volume|Part)\s+(\d+|[a-z]+)\s+of\s+(?:the\s+)?(.+?)$/i); if (r) m = [r[0], r[2], r[1]]; }
+    // "Orbus (Spatterjay 3)": a bare number after a name, but not "(Anniversary Edition 2)" or "(Paperback 2)"
+    if (!m) { const r = seg.match(/^([A-Za-z][^\d]*?[A-Za-z])\s+(\d{1,2})$/); if (r && !/edition|paperback|hardcover|kindle|print|reprint|volume set/i.test(r[1])) m = [r[0], r[1], r[2]]; }
+    if (!m) continue;
+    const num = /^\d/.test(m[2]) ? +m[2] : NUMWORD[m[2].toLowerCase()];
+    if (num == null || !Number.isFinite(num)) continue;
+    const name = m[1].trim().replace(/[,:]$/, "");
+    const key = seriesKey(name);
+    if (!key) continue;
+    return { name, key, num, label: m[3] ? `${m[2]}–${m[3]}` : String(m[2]).replace(/^0+(?=\d)/, "") };
+  }
+  return null;
+}
+
 export const knownSet = (books, kindle) => {
   const seen = new Set(), out = [];
   for (const b of [...books, ...kindle]) {

@@ -48,7 +48,11 @@ serves it (see *Deploy* below).
    per run for each. Pick up to six to compare their picks. Also there: reasoning effort (mapped to the nearest level
    each model supports), the number of picks, and *Skip providers that may store or train on prompts* (on by
    default; OpenRouter's `data_collection: deny`). *View what gets sent* shows the exact request. Mark picks *Bought it*, *Want to read*, *Read it* or *Not for me*; all four feed the next run.
-4. **Library** and **Insights** work like a Goodreads you own: shelves, stars, notes, search, stats.
+4. **Library** and **Insights** work like a Goodreads you own: shelves, stars, notes, search, stats. Filter the
+   Library and *Mark all read*, *Rate all* or *Move all to* a shelf, or *Select books…* to change just some of them;
+   every bulk change can be undone. Click any author's name for their page: every book of theirs you have, each series
+   in its own block (read count, reading order, the next one to read, and numbers you don't have, linked to the
+   Kindle store), with *Mark all read* per series.
 5. **Settings → Your data**: download a backup file, restore one, or delete everything. Backups never include keys.
 
 ## Privacy, and how to check it
