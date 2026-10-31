@@ -76,15 +76,28 @@ Copy `web/` to any static host. HTTPS is required outside localhost: the OpenRou
 need a secure context. The CSP travels inside `index.html`, so it holds even on hosts that add no headers. Sending it
 as a header too adds `frame-ancestors 'none'`.
 
-**deploy/deploy.sh**, for an nginx host where the app lives under a path such as `/mynextbook/`: clone the repo on
-the server and run the script as root. It pulls, copies `web/` to `/var/www/mynextbook`, writes
-`/etc/nginx/snippets/mynextbook.conf` with the headers below (the CSP is taken from `index.html`, so the two never
-drift), tests and reloads nginx. Add `include /etc/nginx/snippets/mynextbook.conf;` to the site's HTTPS server block
-once. `PREFIX`, `WEBROOT` and `SNIPPET` override the defaults. Run it again to update.
+**deploy/deploy.sh**, for nginx: clone the repo on the server and run the script as root. It pulls, copies `web/` to
+`/var/www/mynextbook`, writes `/etc/nginx/snippets/mynextbook.conf` with the headers below (the CSP is taken from
+`index.html`, so the two never drift), tests and reloads nginx. Run it again to update. Once, give the app a site
+that includes the snippet, and let certbot add HTTPS:
 
-Hosting under a path shares the origin (and so the browser storage) with every other app on that hostname: their
-scripts could read this app's IndexedDB. Give it its own hostname if those apps aren't ones you'd trust with your
-visitors' libraries and OpenRouter keys.
+```nginx
+# /etc/nginx/sites-available/books.example.org, linked into sites-enabled
+server {
+    listen 80;
+    server_name books.example.org;
+    include /etc/nginx/snippets/mynextbook.conf;
+}
+```
+
+```bash
+certbot --nginx -d books.example.org --redirect
+```
+
+Give it its own hostname rather than a path on a shared one: browser storage is per origin, so every other app on a
+shared hostname could read this app's IndexedDB (visitors' libraries and OpenRouter keys). If you must, `PREFIX=/mynextbook
+deploy/deploy.sh` serves it under that path; include the snippet in the shared site's HTTPS server block.
+`WEBROOT` and `SNIPPET` override the other defaults.
 
 **serve.py** behind a TLS proxy: `python3 serve.py --port 8790`, then proxy to it. It serves only `web/`, answers only
 GET/HEAD (405 for anything else, body unread), lists no directories, and logs method, path and status only.
@@ -156,6 +169,6 @@ web/js/books-api.js       Google Books + Open Library lookups and background enr
 web/js/net.js             the one fetch wrapper: no requests to the host, no cookies, logged
 web/js/privacy.js         evidence for the Privacy panel
 serve.py                  stdlib static server with the security headers
-deploy/deploy.sh          install / update on an nginx host under a path prefix
+deploy/deploy.sh          install / update on an nginx host
 tools/export_local_db.py  old SQLite database → backup file for the browser edition
 ```

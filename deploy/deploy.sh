@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deploy findMyNextBook to an nginx host under a path prefix, e.g. https://apps.example.org/mynextbook/
+# Deploy findMyNextBook to an nginx host: on its own hostname (recommended, e.g. https://books.example.org/) or
+# under a path prefix of a shared one (PREFIX=/mynextbook, e.g. https://apps.example.org/mynextbook/).
 #
 #   git clone https://github.com/dillera/findMyNextBook.git /root/apps/findMyNextBook
 #   /root/apps/findMyNextBook/deploy/deploy.sh            # first install and every update
@@ -7,16 +8,25 @@
 # What it does, every run (safe to repeat):
 #   1. git pull --ff-only (skip with NO_PULL=1)
 #   2. copies web/ to $WEBROOT, readable by nginx (the clone itself can stay in /root)
-#   3. writes $SNIPPET: the nginx locations for $PREFIX, with the same Content-Security-Policy as web/index.html
+#   3. writes $SNIPPET: the nginx location(s) for the app, with the same Content-Security-Policy as web/index.html
 #      plus frame-ancestors 'none', GET/HEAD only, and an access log of method + path + status (no query string,
 #      no IP address, no user agent)
-#   4. nginx -t, then reloads nginx
+#   4. nginx -t (rolling the snippet back if it fails), then reloads nginx
 #
-# Once per server, include the snippet inside the HTTPS server block of your site:
-#   include /etc/nginx/snippets/mynextbook.conf;
+# Once per server, include the snippet in the site's HTTPS server block. For an own hostname, a whole site:
+#   server {
+#       listen 80;
+#       server_name books.example.org;
+#       include /etc/nginx/snippets/mynextbook.conf;
+#   }
+# then `certbot --nginx -d books.example.org --redirect` adds HTTPS and the http→https redirect.
+#
+# Why an own hostname: browser storage is per origin. Under a path, every other app on that hostname can read this
+# app's IndexedDB (visitors' libraries and OpenRouter keys).
 set -euo pipefail
 
-PREFIX=${PREFIX:-/mynextbook}
+PREFIX=${PREFIX-}                     # "" = the app is the whole site; "/mynextbook" = served under that path
+PREFIX=${PREFIX%/}
 WEBROOT=${WEBROOT:-/var/www/mynextbook}
 SNIPPET=${SNIPPET:-/etc/nginx/snippets/mynextbook.conf}
 LOGFMT=${LOGFMT:-/etc/nginx/conf.d/mynextbook-log.conf}
@@ -25,6 +35,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 [ "$(id -u)" = 0 ] || { echo "Run as root (writes nginx config and reloads nginx)"; exit 1; }
 command -v rsync >/dev/null || { echo "rsync is required"; exit 1; }
+[[ "$PREFIX" =~ ^(/[A-Za-z0-9._-]+)*$ ]] || { echo "PREFIX must be empty or look like /mynextbook"; exit 1; }
 
 if [ -z "${NO_PULL:-}" ]; then
   before=$(git -C "$REPO" rev-parse HEAD)
@@ -55,13 +66,18 @@ cat > "$LOGFMT" <<EOF
 log_format mynextbook_path '\$time_iso8601 \$request_method \$uri \$status';
 EOF
 
-cat > "$SNIPPET" <<EOF
-# Managed by findMyNextBook deploy/deploy.sh. Regenerated on each run; edit the script, not this file.
+{
+  echo "# Managed by findMyNextBook deploy/deploy.sh. Regenerated on each run; edit the script, not this file."
+  if [ -n "$PREFIX" ]; then
+    cat <<EOF
 location = $PREFIX {
     access_log $LOGFILE mynextbook_path;
     return 301 $PREFIX/;
 }
 
+EOF
+  fi
+  cat <<EOF
 location ^~ $PREFIX/ {
     alias $WEBROOT/;
     index index.html;
@@ -74,17 +90,21 @@ location ^~ $PREFIX/ {
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()" always;
     add_header Cache-Control "no-cache" always;
-}
 EOF
+  # HSTS covers a whole hostname, so only send it when the hostname is ours alone
+  [ -n "$PREFIX" ] || echo '    add_header Strict-Transport-Security "max-age=31536000" always;'
+  echo "}"
+} > "$SNIPPET"
 
 # -R: sites-enabled holds symlinks, which -r does not follow
 if ! grep -Rqs "include $SNIPPET;" /etc/nginx/sites-enabled/ /etc/nginx/nginx.conf; then
   echo
-  echo "Almost done: add this line inside your site's HTTPS server { } block, then run this script again:"
+  echo "Almost done: include the snippet in your site's HTTPS server block (see the top of this script), then run"
+  echo "this script again:"
   echo "    include $SNIPPET;"
   exit 0
 fi
 
 nginx -t || rollback
 systemctl reload nginx
-echo "Deployed to $WEBROOT and served at $PREFIX/"
+echo "Deployed to $WEBROOT and served at ${PREFIX:-}/"
