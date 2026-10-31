@@ -74,7 +74,8 @@ location ^~ $PREFIX/ {
 }
 EOF
 
-if ! grep -rqs "include $SNIPPET;" /etc/nginx/sites-enabled/ /etc/nginx/nginx.conf; then
+# -R: sites-enabled holds symlinks, which -r does not follow
+if ! grep -Rqs "include $SNIPPET;" /etc/nginx/sites-enabled/ /etc/nginx/nginx.conf; then
   echo
   echo "Almost done: add this line inside your site's HTTPS server { } block, then run this script again:"
   echo "    include $SNIPPET;"
