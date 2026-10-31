@@ -127,8 +127,8 @@ Then **Settings → Restore backup** in the app. Links between Kindle books and 
 proves them; the rest are re-matched by the browser's stricter title matcher, and a *Review* banner offers anything
 that should be added.
 
-The old server (`app/`, `static/`, `run.sh`, `requirements.txt`) is still in the repo and still runs (`./run.sh`,
-port 8765). It isn't needed for the browser edition.
+The exporter needs only Python's standard library. The server edition itself was removed after commit `4e63de5`
+(`git checkout 4e63de5` to run it again).
 
 ## Layout
 
