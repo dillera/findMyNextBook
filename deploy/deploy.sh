@@ -27,7 +27,10 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 command -v rsync >/dev/null || { echo "rsync is required"; exit 1; }
 
 if [ -z "${NO_PULL:-}" ]; then
+  before=$(git -C "$REPO" rev-parse HEAD)
   git -C "$REPO" pull --ff-only
+  # the pull may have replaced this script; bash would carry on running the old copy, so start the new one
+  [ "$(git -C "$REPO" rev-parse HEAD)" = "$before" ] || NO_PULL=1 exec "$REPO/deploy/deploy.sh"
 fi
 echo "Deploying $(git -C "$REPO" log --oneline -1)"
 
