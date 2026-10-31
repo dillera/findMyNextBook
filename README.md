@@ -76,6 +76,16 @@ Copy `web/` to any static host. HTTPS is required outside localhost: the OpenRou
 need a secure context. The CSP travels inside `index.html`, so it holds even on hosts that add no headers. Sending it
 as a header too adds `frame-ancestors 'none'`.
 
+**deploy/deploy.sh**, for an nginx host where the app lives under a path such as `/mynextbook/`: clone the repo on
+the server and run the script as root. It pulls, copies `web/` to `/var/www/mynextbook`, writes
+`/etc/nginx/snippets/mynextbook.conf` with the headers below (the CSP is taken from `index.html`, so the two never
+drift), tests and reloads nginx. Add `include /etc/nginx/snippets/mynextbook.conf;` to the site's HTTPS server block
+once. `PREFIX`, `WEBROOT` and `SNIPPET` override the defaults. Run it again to update.
+
+Hosting under a path shares the origin (and so the browser storage) with every other app on that hostname: their
+scripts could read this app's IndexedDB. Give it its own hostname if those apps aren't ones you'd trust with your
+visitors' libraries and OpenRouter keys.
+
 **serve.py** behind a TLS proxy: `python3 serve.py --port 8790`, then proxy to it. It serves only `web/`, answers only
 GET/HEAD (405 for anything else, body unread), lists no directories, and logs method, path and status only.
 
@@ -146,5 +156,6 @@ web/js/books-api.js       Google Books + Open Library lookups and background enr
 web/js/net.js             the one fetch wrapper: no requests to the host, no cookies, logged
 web/js/privacy.js         evidence for the Privacy panel
 serve.py                  stdlib static server with the security headers
+deploy/deploy.sh          install / update on an nginx host under a path prefix
 tools/export_local_db.py  old SQLite database → backup file for the browser edition
 ```
