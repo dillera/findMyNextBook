@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Privacy, enforced by your browser. This page may load its own files from this server, but it may not SEND anything
+  to this server: connect-src lists only OpenRouter, Google Books and Open Library, so fetch/XHR/beacons to this host
+  are refused; img-src doesn't include this host either, so no tracking pixels; form-action 'none' means no form
+  submissions. Your library lives in this browser's IndexedDB. The Privacy panel in the app tests all of this live.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: https://m.media-amazon.com https://images-na.ssl-images-amazon.com https://books.google.com https://books.googleusercontent.com https://covers.openlibrary.org https://archive.org https://*.archive.org; connect-src https://openrouter.ai https://www.googleapis.com https://openlibrary.org; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; media-src 'none'; font-src 'none'">
+<meta name="referrer" content="no-referrer">
+<title>findMyNextBook</title>
+<meta name="description" content="Find your next book from everything you've bought on Amazon and rated on Goodreads. Private: your library never leaves your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231f6b57' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 19.5V5a2 2 0 0 1 2-2h13v16H6.5A2.5 2.5 0 0 0 4 21.5v-2z'/%3E%3Cpath d='M9 7h6'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V5a2 2 0 0 1 2-2h13v16H6.5A2.5 2.5 0 0 0 4 21.5v-2z"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H19"/><path d="M9 7h6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4m0 0-4 4m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+</svg>
+
+<header class="topbar">
+  <a class="brand" href="#discover"><svg><use href="#i-book"/></svg><span>findMyNextBook</span></a>
+  <nav class="tabs">
+    <button data-view="discover">Discover</button>
+    <button data-view="library">Library</button>
+    <button data-view="insights">Insights</button>
+  </nav>
+  <div class="topbar-right">
+    <span id="bg-pill" class="bg-pill" hidden></span>
+    <button id="open-privacy" class="priv-pill" title="Where your data lives, and proof"><svg><use href="#i-lock"/></svg><span>Private to this browser</span></button>
+    <button id="open-import" class="btn sm"><svg><use href="#i-upload"/></svg>Import books</button>
+    <button id="open-settings" class="icon-btn" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button>
+  </div>
+</header>
+
+<main>
+<!-- ===================== DISCOVER ===================== -->
+<section id="view-discover" class="view">
+  <div id="banner" class="banner" hidden></div>
+  <div class="hero">
+    <h1>What should you read next?</h1>
+    <p class="sub" id="hero-sub">&nbsp;</p>
+    <form id="ask" class="ask" autocomplete="off">
+      <input id="mood" placeholder="Anything you're in the mood for? (optional)" aria-label="What you're in the mood for">
+      <button id="go" class="btn primary lg" type="submit">Find my next book</button>
+    </form>
+    <div class="chips" id="mood-chips">
+      <button type="button" class="chip">Something short</button>
+      <button type="button" class="chip">A standalone, not a series</button>
+      <button type="button" class="chip">More like my recent 5★ reads</button>
+      <button type="button" class="chip">Outside my comfort zone</button>
+      <button type="button" class="chip">An overlooked gem</button>
+    </div>
+    <details class="options" id="options">
+      <summary>Options</summary>
+      <div class="options-body">
+        <p class="opt-label">Model</p>
+        <div id="model-grid" class="model-grid"><span class="muted small">Loading models from OpenRouter…</span></div>
+        <div class="opt-row">
+          <label class="grow">Other OpenRouter model <input id="rec-model" list="model-list" placeholder="any slug, e.g. google/gemini-3-pro" spellcheck="false"></label>
+          <datalist id="model-list"></datalist>
+        </div>
+        <div class="opt-row">
+          <label title="How long the model reasons before answering. Higher is slower and costs more.">Effort
+            <select id="rec-effort"><option value="">model default</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label>
+          <label>Picks <input id="rec-n" type="number" min="3" max="25" value="10"></label>
+          <button id="rec-prompt" class="btn sm ghost" type="button">View what gets sent</button>
+        </div>
+      </div>
+    </details>
+  </div>
+  <div id="progress" class="progress" hidden></div>
+  <div id="results" hidden>
+    <div class="results-head">
+      <div><h2>Your next books</h2><div class="meta" id="results-meta"></div></div>
+      <label class="small muted">Earlier picks&nbsp; <select id="run-select"></select></label>
+    </div>
+    <div id="model-tabs" class="model-tabs" hidden></div>
+    <blockquote id="taste" class="taste" hidden></blockquote>
+    <div id="recs" class="recs"></div>
+    <p id="dropped" class="dropped"></p>
+  </div>
+</section>
+
+<!-- ===================== LIBRARY ===================== -->
+<section id="view-library" class="view" hidden>
+  <div class="lib-head">
+    <h1>Library<span id="lib-count" class="count"></span></h1>
+    <button id="add-book" class="btn">+ Add a book</button>
+  </div>
+  <div class="toolbar">
+    <div class="search"><svg><use href="#i-search"/></svg><input id="q" type="search" placeholder="Search title, author or blurb"></div>
+    <div class="chips" id="shelf-chips"></div>
+    <div class="toolbar-right">
+      <select id="f-rating" aria-label="Rating">
+        <option value="">Any rating</option><option value="5">★★★★★</option><option value="4">★★★★</option>
+        <option value="3">★★★</option><option value="2">★★</option><option value="1">★</option>
+      </select>
+      <select id="f-sort" aria-label="Sort">
+        <option value="date_read:desc">Recently read</option>
+        <option value="date_added:desc">Recently added</option>
+        <option value="my_rating:desc">My rating</option>
+        <option value="title:asc">Title A–Z</option>
+        <option value="author:asc">Author A–Z</option>
+        <option value="original_year:desc">Newest published</option>
+        <option value="original_year:asc">Oldest published</option>
+        <option value="pages:desc">Longest</option>
+      </select>
+      <div class="seg" role="group" aria-label="Layout">
+        <button data-layout="grid" class="active" title="Grid"><svg><use href="#i-grid"/></svg></button>
+        <button data-layout="list" title="List"><svg><use href="#i-list"/></svg></button>
+      </div>
+    </div>
+  </div>
+  <div id="books" class="grid"></div>
+</section>
+
+<!-- ===================== INSIGHTS ===================== -->
+<section id="view-insights" class="view" hidden>
+  <div id="stat-tiles" class="tiles"></div>
+  <div class="charts">
+    <figure class="panel"><figcaption>Books read per year</figcaption><div id="chart-year"></div></figure>
+    <figure class="panel"><figcaption>How you rate</figcaption><div id="chart-rating"></div></figure>
+    <figure class="panel"><figcaption>Most-read authors · average rating</figcaption><div id="chart-authors"></div></figure>
+    <figure class="panel"><figcaption>Genres · average rating</figcaption><div id="chart-cats"></div></figure>
+  </div>
+</section>
+<footer class="page-foot"><svg><use href="#i-lock"/></svg>Your library is stored only in this browser. This site's server never receives it. <a href="#" data-privacy>See the proof</a></footer>
+</main>
+
+<!-- ===================== IMPORT WIZARD ===================== -->
+<div id="wizard" class="overlay" hidden>
+  <div class="sheet wz" role="dialog" aria-modal="true" aria-label="Import your books">
+    <header class="sheet-head">
+      <ol class="steps" id="wz-steps">
+        <li data-step="kindle"><span class="dot">1</span><span class="lbl">Kindle library</span></li>
+        <li data-step="review"><span class="dot">2</span><span class="lbl">Review</span></li>
+        <li data-step="rate"><span class="dot">3</span><span class="lbl">Rate</span></li>
+        <li data-step="done"><span class="dot">4</span><span class="lbl">Done</span></li>
+      </ol>
+      <button class="icon-btn" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button>
+    </header>
+    <div class="sheet-body">
+      <!-- step 1 -->
+      <section data-panel="kindle">
+        <h2 class="title">Bring in every book you've bought on Amazon</h2>
+        <p class="lead">A small script reads your Kindle library on Amazon's own site, in your browser, signed in as you. You paste the result here. Amazon never talks to this site, and this site's server never sees your books.</p>
+        <ol class="how">
+          <li><b>Add the button</b><span>Drag <a class="bookmarklet" id="bookmarklet" href="#">📚 Kindle → findMyNextBook</a> to your bookmarks bar.</span></li>
+          <li><b>Click it on Amazon</b><span>Open <a href="https://read.amazon.com/kindle-library" target="_blank" rel="noopener">read.amazon.com/kindle-library</a>, sign in, and click the bookmark. It copies your library.</span></li>
+          <li><b>Paste it here</b><span>Click the box below and press ⌘V (Ctrl+V), or drop the file it offers to download.</span></li>
+        </ol>
+        <label class="paste-zone" id="paste-zone">
+          <textarea id="wz-paste" placeholder="Paste your Kindle export here, or drop the .json file"></textarea>
+        </label>
+        <div id="wz-kindle-status"></div>
+        <details class="alt">
+          <summary>No bookmarks bar? Use the browser console instead</summary>
+          <div class="alt-body">
+            On read.amazon.com/kindle-library, open the developer console (⌥⌘J in Chrome, ⌥⌘C in Safari), paste this and press Enter. Chrome may ask you to type “allow pasting” first.
+            <div class="code"><pre id="wz-script"></pre><button class="btn sm" id="wz-copy" type="button">Copy</button></div>
+          </div>
+        </details>
+        <details class="alt">
+          <summary>What exactly does the script do?</summary>
+          <div class="alt-body">It runs on Amazon's page and makes two kinds of request, both to Amazon itself: the list of your Kindle books (on read.amazon.com) or the dates Kindle saw you finish them (on amazon.com). It puts the result on your clipboard and offers it as a download. It sends nothing anywhere else. The full source is the code under “browser console” above.</div>
+        </details>
+      </section>
+      <!-- step 2 -->
+      <section data-panel="review" hidden>
+        <h2 class="title" id="wz-review-title"></h2>
+        <p class="lead" id="wz-review-lead"></p>
+        <div class="stat-row" id="wz-review-stats"></div>
+        <div id="wz-new-wrap" class="wz-section">
+          <h3>New to your library</h3>
+          <div class="cover-wall" id="wz-new-covers"></div>
+        </div>
+        <div class="wz-section" id="wz-choices-wrap">
+          <h3>Choices</h3>
+          <div class="choice-list" id="wz-choices"></div>
+        </div>
+        <div class="wz-section">
+          <h3>Add more (optional)</h3>
+          <div class="extra-grid three">
+            <div class="drop" id="drop-finished" tabindex="0">
+              <b>When you finished each book</b>
+              <span class="d">Click the same bookmark on any <a href="https://www.amazon.com/kindle/reading/insights" target="_blank" rel="noopener">amazon.com</a> page, then paste here.</span>
+              <textarea class="mini-paste" data-kind="finished" placeholder="Paste here"></textarea>
+              <span class="res"></span>
+            </div>
+            <label class="drop" id="drop-goodreads">
+              <b>Goodreads export</b>
+              <span class="d">Your ratings and read dates, the strongest taste signal. Goodreads → My Books → Import and export.</span>
+              <input type="file" accept=".csv" hidden data-kind="goodreads">
+              <span class="res"></span>
+            </label>
+            <label class="drop" id="drop-orders">
+              <b>Paper books from Amazon</b>
+              <span class="d">Amazon → Account → Request Your Data → “Your Orders”. Drop the zip or its order CSV here.</span>
+              <input type="file" accept=".zip,.csv" hidden data-kind="orders">
+              <span class="res"></span>
+            </label>
+          </div>
+          <p class="muted small" style="margin:10px 0 0">Files are opened right here in your browser. They're never uploaded.</p>
+        </div>
+      </section>
+      <!-- step 3 -->
+      <section data-panel="rate" hidden>
+        <h2 class="title">Rate what you've read</h2>
+        <p class="lead" id="wz-rate-lead"></p>
+        <div class="rate-grid" id="wz-rate"></div>
+        <div class="center" style="margin-top:22px"><button class="btn" id="wz-more" type="button" hidden>Show more</button></div>
+      </section>
+      <!-- step 4 -->
+      <section data-panel="done" hidden class="center">
+        <div class="done-mark">✓</div>
+        <h2 class="title">Your library is ready</h2>
+        <p class="lead" style="margin:10px auto 0" id="wz-done-lead"></p>
+        <div class="stat-row" id="wz-done-stats"></div>
+        <div id="wz-connect" class="connect-box" hidden></div>
+      </section>
+    </div>
+    <footer class="sheet-foot" id="wz-foot"></footer>
+  </div>
+</div>
+
+<!-- ===================== PRIVACY ===================== -->
+<div id="privacy" class="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Privacy">
+    <header class="sheet-head"><h2>Your data stays in this browser</h2><button class="icon-btn" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+    <div class="sheet-body" id="privacy-body"></div>
+  </div>
+</div>
+
+<!-- ===================== SETTINGS ===================== -->
+<div id="settings" class="overlay" hidden>
+  <div class="sheet narrow" role="dialog" aria-modal="true" aria-label="Settings">
+    <header class="sheet-head"><h2>Settings</h2><button class="icon-btn" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+    <div class="sheet-body" id="settings-body"></div>
+  </div>
+</div>
+
+<!-- ===================== ADD A BOOK ===================== -->
+<div id="adder" class="overlay" hidden>
+  <div class="sheet narrow" role="dialog" aria-modal="true" aria-label="Add a book">
+    <header class="sheet-head"><h2>Add a book</h2><button class="icon-btn" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+    <div class="sheet-body">
+      <form id="g-form" class="ask" style="box-shadow:none">
+        <input id="g-q" placeholder="Title, author, or isbn:9780…" aria-label="Search Google Books">
+        <button class="btn primary" type="submit">Search</button>
+      </form>
+      <div id="g-results" style="margin-top:12px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== PROMPT ===================== -->
+<div id="modal" class="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Prompt">
+    <header class="sheet-head"><h2 id="modal-title">Prompt</h2><button class="icon-btn" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+    <div class="sheet-body"><p class="muted small" id="modal-note" style="margin-top:0"></p><pre id="modal-pre"></pre></div>
+  </div>
+</div>
+
+<!-- ===================== BOOK DRAWER ===================== -->
+<div id="backdrop" hidden></div>
+<aside id="drawer" hidden>
+  <button id="drawer-close" class="icon-btn close" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+  <div id="drawer-body"></div>
+</aside>
+
+<div id="tip" class="tip" hidden></div>
+<div id="toast" hidden></div>
+<noscript><p style="padding:40px;text-align:center">findMyNextBook runs entirely in your browser, so it needs JavaScript.</p></noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

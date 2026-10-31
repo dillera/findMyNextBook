@@ -58,11 +58,12 @@ def clean_title(t: str) -> str:
     # Amazon titles carry marketing suffixes: "Foo: A Novel (Bar Series Book 2) (English Edition)"
     t = re.sub(r"\s*\((?:[^()]*(?:Book|Series|Edition|Trilogy|Saga|Novel)[^()]*)\)", "", t, flags=re.I)
     t = re.sub(r"\s*\[[^\]]*\]", "", t)
+    t = re.sub(r":\s*(?:a|an)\s+(?:novel|thriller|memoir)\s*$", "", t.strip(), flags=re.I)
     return t.strip(" :-")
 
 
 def import_text(text: str, source: str, filename: str = "") -> dict:
-    from .recommend import _norm_title  # lazy: avoids circular import
+    from .matching import norm_title as _norm_title  # lazy: matching imports google_books
     rows = parse(text, filename)
     added = skipped = 0
     with get_conn() as conn:

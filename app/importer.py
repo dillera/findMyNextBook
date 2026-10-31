@@ -82,20 +82,32 @@ ON CONFLICT(goodreads_id) DO UPDATE SET
 
 
 def import_csv_text(text: str) -> dict:
-    inserted = updated = 0
+    from .matching import BookIndex  # lazy: matching imports google_books, which `python -m app.importer` doesn't need
+
+    inserted = updated = merged = 0
     ts = now()
     with get_conn() as conn:
+        # books that came from Amazon (no Goodreads id yet): a Goodreads row for the same book adopts that row, so
+        # importing Kindle first and Goodreads second doesn't create duplicates
+        orphans = BookIndex(conn, "WHERE goodreads_id IS NULL")
         for row in parse_rows(text):
             row["ts"] = ts
             exists = row["goodreads_id"] and conn.execute(
                 "SELECT 1 FROM books WHERE goodreads_id=?", (row["goodreads_id"],)
             ).fetchone()
+            if not exists and row["goodreads_id"]:
+                hit = orphans.find(row["title"], row["author"], isbn=row["isbn"])
+                if hit:
+                    conn.execute("UPDATE books SET goodreads_id=? WHERE id=?", (row["goodreads_id"], hit["id"]))
+                    orphans.remove(hit)
+                    merged += 1
+                    exists = True
             conn.execute(UPSERT, row)
             if exists:
                 updated += 1
             else:
                 inserted += 1
-    return {"inserted": inserted, "updated": updated}
+    return {"inserted": inserted, "updated": updated, "merged": merged}
 
 
 def import_csv_file(path: str) -> dict:

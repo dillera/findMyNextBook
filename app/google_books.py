@@ -113,13 +113,16 @@ async def enrich_book(client: httpx.AsyncClient, book: dict) -> bool:
             conn.execute("UPDATE books SET enriched_at=?, enrich_error='not found' WHERE id=?", (now(), book["id"]))
             return False
         google_id = meta["google_id"]  # None when the hit came from Open Library
+        # Amazon covers (from the Kindle sync) are sharper than Google's thumbnails, so they stay.
+        # Order-history books arrive without an author; take Google's.
         conn.execute(
-            """UPDATE books SET google_id=?, description=?, categories=?, thumbnail=?, google_rating=?,
-               google_ratings_count=?, google_pages=?, google_published=?, isbn13=COALESCE(isbn13,?),
-               enriched_at=?, enrich_error=NULL WHERE id=?""",
+            """UPDATE books SET google_id=?, description=?, categories=?,
+               thumbnail=CASE WHEN thumbnail LIKE '%media-amazon.com%' THEN thumbnail ELSE COALESCE(?, thumbnail) END,
+               google_rating=?, google_ratings_count=?, google_pages=?, google_published=?, isbn13=COALESCE(isbn13,?),
+               author=COALESCE(author, ?), enriched_at=?, enrich_error=NULL WHERE id=?""",
             (google_id, meta["description"], meta["categories"], meta["thumbnail"], meta["google_rating"],
              meta["google_ratings_count"], meta["google_pages"], meta["google_published"], meta["isbn13"],
-             now(), book["id"]),
+             (meta.get("authors") or [None])[0], now(), book["id"]),
         )
     return True
 

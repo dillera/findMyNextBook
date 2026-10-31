@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import uuid
 from typing import Optional
 
 import httpx
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import google_books, openrouter, owned, recommend
+from . import amazon_orders, google_books, kindle_sync, openrouter, owned, recommend
 from .db import get_conn, init_db, now, row_to_dict, get_setting, set_setting
 from .importer import import_csv_text
 
@@ -22,13 +23,22 @@ STATIC = os.path.join(ROOT, "static")
 app = FastAPI(title="findMyNextBook")
 init_db()
 
+
+@app.middleware("http")
+async def revalidate_ui(request, call_next):
+    """The UI files change with the code; make the browser check for a newer copy (a 304 when unchanged)."""
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 SHELVES = ("read", "currently-reading", "to-read", "abandoned")
 
 
 # --- library --------------------------------------------------------------------------------------
 @app.get("/api/books")
 def list_books(q: str = "", shelf: str = "", rating: str = "", author: str = "", sort: str = "date_added",
-               dir: str = "desc", limit: int = 2000, offset: int = 0):
+               dir: str = "desc", kindle: bool = False, unrated: bool = False, limit: int = 2000, offset: int = 0):
     sort_cols = {"title", "author", "my_rating", "date_read", "date_added", "original_year", "pages", "google_rating"}
     if sort not in sort_cols:
         sort = "date_added"
@@ -46,11 +56,52 @@ def list_books(q: str = "", shelf: str = "", rating: str = "", author: str = "",
     if author:
         where.append("author=?")
         params.append(author)
+    if kindle:
+        where.append("asin IS NOT NULL")
+    if unrated:
+        where.append("exclusive_shelf='read' AND my_rating=0")
     sql = "SELECT * FROM books" + (" WHERE " + " AND ".join(where) if where else "")
     sql += f" ORDER BY {sort} {dir} NULLS LAST, title ASC LIMIT ? OFFSET ?"
     with get_conn() as conn:
         rows = [row_to_dict(r) for r in conn.execute(sql, params + [limit, offset])]
         total = conn.execute("SELECT COUNT(*) FROM books" + (" WHERE " + " AND ".join(where) if where else ""), params).fetchone()[0]
+    return {"books": rows, "total": total}
+
+
+@app.get("/api/status")
+def status():
+    """Everything the header, the onboarding banner and the library chips need, in one call."""
+    with get_conn() as conn:
+        c = lambda sql, *a: conn.execute(sql, a).fetchone()[0]  # noqa: E731
+        out = {
+            "books": c("SELECT COUNT(*) FROM books"),
+            "shelves": {r[0]: r[1] for r in conn.execute("SELECT exclusive_shelf, COUNT(*) FROM books GROUP BY 1")},
+            "rated": c("SELECT COUNT(*) FROM books WHERE my_rating > 0"),
+            "unrated_read": c("SELECT COUNT(*) FROM books WHERE exclusive_shelf='read' AND my_rating=0"),
+            "on_kindle": c("SELECT COUNT(*) FROM books WHERE asin IS NOT NULL"),
+            "goodreads": c("SELECT COUNT(*) FROM books WHERE goodreads_id IS NOT NULL"),
+            "kindle_ledger": c("SELECT COUNT(*) FROM owned WHERE asin IS NOT NULL"),
+            "kindle_pending": c("SELECT COUNT(*) FROM owned WHERE asin IS NOT NULL AND book_id IS NULL "
+                                "AND COALESCE(resource_type, '') != 'EBOOK_SAMPLE'"),
+            "kindle_last_sync": get_setting(conn, "kindle_last_sync"),
+            "kindle_last_apply": get_setting(conn, "kindle_last_apply"),
+            "runs": c("SELECT COUNT(*) FROM rec_runs"),
+            "enriched": c("SELECT COUNT(*) FROM books WHERE enriched_at IS NOT NULL AND enrich_error IS NULL"),
+        }
+    out.update(openrouter_key=bool(os.environ.get("OPENROUTER_API_KEY")), google_key=bool(os.environ.get("GOOGLE_BOOKS_API_KEY")),
+               kindle_sync=kindle_sync.progress(), enrich=google_books.progress())
+    return out
+
+
+@app.get("/api/books/to-rate")
+def books_to_rate(limit: int = 24, offset: int = 0):
+    """Read but unrated, newest Kindle purchase first: the books the wizard asks about."""
+    where = "WHERE exclusive_shelf='read' AND my_rating=0"
+    with get_conn() as conn:
+        rows = [row_to_dict(r) for r in conn.execute(
+            f"SELECT * FROM books {where} ORDER BY kindle_rank IS NULL, kindle_rank, date_read DESC, id DESC LIMIT ? OFFSET ?",
+            (limit, offset))]
+        total = conn.execute(f"SELECT COUNT(*) FROM books {where}").fetchone()[0]
     return {"books": rows, "total": total}
 
 
@@ -110,6 +161,8 @@ class NewBook(BaseModel):
     year: Optional[int] = None
     pages: Optional[int] = None
     google_rating: Optional[float] = None
+    asin: Optional[str] = None
+    source: str = "manual"
 
 
 @app.post("/api/books")
@@ -124,11 +177,11 @@ def add_book(b: NewBook):
             raise HTTPException(409, "already in library")
         cur = conn.execute(
             """INSERT INTO books(title,author,isbn13,exclusive_shelf,description,thumbnail,categories,original_year,pages,
-               google_rating,google_id,binding,date_added,enriched_at,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,'Kindle Edition',?,?,?,?)""",
+               google_rating,google_id,binding,date_added,enriched_at,asin,source,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,'Kindle Edition',?,?,?,?,?,?)""",
             (b.title, b.author, b.isbn13, b.exclusive_shelf, b.description, b.thumbnail,
              json.dumps(b.categories or []), b.year, b.pages, b.google_rating, b.google_id, ts[:10],
-             ts if b.google_id else None, ts, ts),
+             ts if b.google_id else None, b.asin, b.source, ts, ts),
         )
         book_id = cur.lastrowid
     return get_book(book_id)
@@ -153,6 +206,7 @@ def stats():
         avg = c("SELECT AVG(my_rating) FROM books WHERE exclusive_shelf='read' AND my_rating>0").fetchone()[0]
         enriched = c("SELECT COUNT(*) FROM books WHERE enriched_at IS NOT NULL AND enrich_error IS NULL").fetchone()[0]
         total = c("SELECT COUNT(*) FROM books").fetchone()[0]
+        on_kindle = c("SELECT COUNT(*) FROM books WHERE asin IS NOT NULL").fetchone()[0]
         cats = {}
         for (cj, rating) in c("SELECT categories, my_rating FROM books WHERE categories IS NOT NULL AND exclusive_shelf='read'"):
             try:
@@ -166,7 +220,7 @@ def stats():
                             key=lambda d: d["n"], reverse=True)[:15]
     return {"shelves": shelves, "ratings": ratings, "by_year": by_year, "by_month": by_month, "authors": authors,
             "total_pages": pages or 0, "avg_rating": round(avg or 0, 2), "enriched": enriched, "total": total,
-            "categories": categories}
+            "on_kindle": on_kindle, "categories": categories}
 
 
 @app.get("/api/authors")
@@ -177,9 +231,14 @@ def authors():
 
 # --- import ---------------------------------------------------------------------------------------
 @app.post("/api/import")
-async def import_csv(file: UploadFile):
-    text = (await file.read()).decode("utf-8-sig")
-    return import_csv_text(text)
+async def import_csv(file: UploadFile, background: BackgroundTasks):
+    text = (await file.read()).decode("utf-8-sig", errors="replace")
+    if "Book Id" not in text.split("\n", 1)[0]:
+        raise HTTPException(400, "That isn't a Goodreads library export (no “Book Id” column)")
+    r = import_csv_text(text)
+    if r["inserted"] and not google_books.progress()["running"]:
+        background.add_task(google_books.enrich_all, True)
+    return r
 
 
 # --- Google Books ---------------------------------------------------------------------------------
@@ -227,26 +286,39 @@ async def google_search(q: str):
 # --- recommendations ------------------------------------------------------------------------------
 class RecRequest(BaseModel):
     model: Optional[str] = None
+    models: Optional[list[str]] = None   # several → one run each, in parallel, grouped by batch_id
     mood: Optional[str] = None
     n: int = 10
+    effort: Optional[str] = None         # low | medium | high | xhigh; None = model default
+    profile: str = "distilled"           # distilled | full
+    verify: bool = True                  # check each pick on the Kindle store (price, already owned)
 
 
 @app.post("/api/recommend")
 async def make_recs(req: RecRequest):
-    try:
-        run_id = await recommend.run_recommendation(req.model, req.mood, max(3, min(req.n, 25)))
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, str(e))
+    """Starts one background run per model and returns their ids; poll /api/recommend/runs/{id} for the stage."""
+    models = [m for m in (req.models or [req.model or openrouter.DEFAULT_MODEL]) if m][:6]
+    if req.profile not in recommend.PROFILE_MODES:
+        raise HTTPException(400, f"profile must be one of {list(recommend.PROFILE_MODES)}")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise HTTPException(400, "OPENROUTER_API_KEY is not set: add it to .env and restart")
+    batch_id = uuid.uuid4().hex[:12] if len(models) > 1 else None
+    n = max(3, min(req.n, 25))
+    run_ids = [recommend.start_run(m, req.mood, n, req.effort, req.profile, batch_id, req.verify) for m in models]
     with get_conn() as conn:
-        set_setting(conn, "last_model", req.model or openrouter.DEFAULT_MODEL)
-    return get_run(run_id)
+        set_setting(conn, "last_models", json.dumps(models))
+        set_setting(conn, "last_effort", req.effort or "")
+        set_setting(conn, "last_profile", req.profile)
+        set_setting(conn, "last_verify", "1" if req.verify else "0")
+        set_setting(conn, "last_n", str(n))
+    return {"run_ids": run_ids, "batch_id": batch_id}
 
 
 @app.get("/api/recommend/runs")
 def list_runs():
     with get_conn() as conn:
         runs = [dict(r) for r in conn.execute(
-            "SELECT r.id, r.created_at, r.model, r.mood, r.status, r.error, "
+            "SELECT r.id, r.created_at, r.model, r.mood, r.status, r.stage, r.error, r.effort, r.profile_mode, r.batch_id, r.served_model, "
             "(SELECT COUNT(*) FROM recommendations x WHERE x.run_id=r.id) AS n FROM rec_runs r ORDER BY id DESC")]
     return runs
 
@@ -266,14 +338,22 @@ def get_run(run_id: int):
         run.pop("prompt", None)
         run["recommendations"] = [row_to_dict(r) for r in conn.execute(
             "SELECT * FROM recommendations WHERE run_id=? ORDER BY rank", (run_id,))]
+        # multi-model batch: mark picks that other models in the same batch also made
+        if run.get("batch_id"):
+            siblings = conn.execute("SELECT id, model FROM rec_runs WHERE batch_id=? AND id!=?", (run["batch_id"], run_id)).fetchall()
+            others = [(s["model"], {(recommend._norm_title(r["title"]), recommend._surname(r["author"])) for r in conn.execute(
+                "SELECT title, author FROM recommendations WHERE run_id=?", (s["id"],))}) for s in siblings]
+            for rec in run["recommendations"]:
+                rec["also_by"] = [m for m, known in others if recommend.is_known(rec["title"], rec["author"], known)]
+            run["batch_models"] = [s["model"] for s in siblings]
     return run
 
 
 @app.get("/api/recommend/prompt")
-def preview_prompt(n: int = 10):
+def preview_prompt(n: int = 10, profile: str = "distilled"):
     with get_conn() as conn:
-        p = recommend.build_profile(conn)
-    return {"system": recommend.SYSTEM, "user": recommend._profile_text(p, n)}
+        _, user = recommend.profile_prompt(conn, profile, n)
+    return {"system": recommend.SYSTEM, "user": user, "chars": len(recommend.SYSTEM) + len(user)}
 
 
 class RecPatch(BaseModel):
@@ -289,15 +369,16 @@ def patch_rec(rec_id: int, p: RecPatch):
         if not rec:
             raise HTTPException(404)
         conn.execute("UPDATE recommendations SET status=? WHERE id=?", (p.status, rec_id))
-    if p.status == "owned":
-        owned.import_text(f"{rec['title']} — {rec['author'] or ''}", "rec")
-    # "bought" / "added" both put the book on the to-read shelf so the next run excludes it
-    if p.status in ("bought", "added"):
+    # every outcome but "not for me" shelves the book, so the next run excludes it. Bought / want-to-read go to
+    # to-read; "already own it" goes to read, because a book you own counts as read (the Kindle import's rule too).
+    shelf = {"bought": "to-read", "added": "to-read", "owned": "read"}.get(p.status)
+    if shelf:
         rec = row_to_dict(rec)
         try:
             add_book(NewBook(title=rec["title"], author=rec["author"], google_id=rec["google_id"], isbn13=rec["isbn13"],
                              description=rec["description"], thumbnail=rec["thumbnail"], categories=rec["categories"],
-                             year=rec["year"], google_rating=rec["google_rating"], exclusive_shelf="to-read"))
+                             year=rec["year"], google_rating=rec["google_rating"], exclusive_shelf=shelf,
+                             asin=rec["asin"] if p.status != "added" else None, source="rec"))
         except HTTPException as e:
             if e.status_code != 409:
                 raise
@@ -313,8 +394,73 @@ class OwnedText(BaseModel):
 @app.get("/api/owned")
 def list_owned():
     with get_conn() as conn:
-        rows = [dict(r) for r in conn.execute("SELECT id,title,author,source,added_at FROM owned ORDER BY title")]
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id,title,author,source,added_at,asin,cover,percent_read,kindle_rank,first_seen_at FROM owned "
+            "ORDER BY kindle_rank IS NULL, kindle_rank, title")]
     return {"owned": rows, "total": len(rows)}
+
+
+# --- Amazon import: Kindle library (Playwright + the app's Chrome) and order history ----------------------
+class KindleApply(BaseModel):
+    include_samples: bool = False
+    toread_as_read: bool = True
+
+
+class KindlePaste(BaseModel):
+    text: str
+
+
+@app.post("/api/kindle/sync")
+async def kindle_sync_start(background: BackgroundTasks):
+    if not kindle_sync.progress()["running"]:
+        background.add_task(kindle_sync.run_sync)
+        await asyncio.sleep(0.1)
+    return kindle_sync.progress()
+
+
+@app.get("/api/kindle/sync")
+def kindle_sync_progress():
+    return kindle_sync.progress()
+
+
+@app.get("/api/kindle/script")
+def kindle_console_script():
+    return {"script": kindle_sync.CONSOLE_SCRIPT, "url": kindle_sync.LIBRARY_URL}
+
+
+@app.post("/api/kindle/paste")
+def kindle_paste(body: KindlePaste):
+    try:
+        items = kindle_sync.parse_paste(body.text)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return kindle_sync.save_items(items)
+
+
+@app.get("/api/kindle/preview")
+def kindle_preview(include_samples: bool = False, toread_as_read: bool = True):
+    return kindle_sync.preview(include_samples, toread_as_read)
+
+
+@app.post("/api/kindle/apply")
+async def kindle_apply(body: KindleApply, background: BackgroundTasks):
+    r = kindle_sync.apply_to_library(body.include_samples, body.toread_as_read)
+    # new books only have an Amazon cover; fetch blurbs and genres (the taste profile uses genres) in the background
+    if r["added"] and not google_books.progress()["running"]:
+        background.add_task(google_books.enrich_all, True)
+    return r
+
+
+@app.post("/api/amazon/orders")
+async def amazon_orders_import(file: UploadFile, background: BackgroundTasks):
+    data = await file.read()
+    try:
+        r = amazon_orders.import_orders(data)
+    except Exception as e:  # noqa: BLE001  (a corrupt zip, a CSV in some other encoding…)
+        raise HTTPException(400, f"Couldn't read that file: {e}")
+    if r["added"] and not google_books.progress()["running"]:
+        background.add_task(google_books.enrich_all, True)
+    return r
 
 
 @app.post("/api/owned")
@@ -343,9 +489,9 @@ def clear_owned():
 
 
 @app.get("/api/models")
-async def models():
+async def models(provider: str = ""):
     try:
-        return await openrouter.list_models()
+        return await openrouter.list_models(provider or None)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, str(e))
 
@@ -353,10 +499,16 @@ async def models():
 @app.get("/api/config")
 def config():
     with get_conn() as conn:
-        last = get_setting(conn, "last_model")
+        last_models = json.loads(get_setting(conn, "last_models") or "null") or [get_setting(conn, "last_model")]
+        effort = get_setting(conn, "last_effort") or ""
+        profile = get_setting(conn, "last_profile") or "distilled"
+        verify = get_setting(conn, "last_verify") != "0"
+        last_n = int(get_setting(conn, "last_n") or 10)
+    default = os.environ.get("OPENROUTER_MODEL", openrouter.DEFAULT_MODEL)
     return {"openrouter_key": bool(os.environ.get("OPENROUTER_API_KEY")),
             "google_key": bool(os.environ.get("GOOGLE_BOOKS_API_KEY")),
-            "default_model": last or os.environ.get("OPENROUTER_MODEL", openrouter.DEFAULT_MODEL)}
+            "default_model": default, "last_models": [m for m in last_models if m] or [default],
+            "last_effort": effort, "last_profile": profile, "last_verify": verify, "last_n": last_n}
 
 
 # --- static UI ------------------------------------------------------------------------------------

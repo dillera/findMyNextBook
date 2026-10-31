@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS owned (
   title TEXT NOT NULL,
   author TEXT,
   norm_title TEXT,
-  source TEXT,          -- paste | amazon-export | kindle-web | rec
+  source TEXT,          -- paste | amazon-export | kindle-web | kindle-sync | rec
   added_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_owned_norm ON owned(norm_title);
@@ -113,9 +113,36 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# columns added after the first release; ALTERed in on startup so existing databases keep working
+MIGRATIONS = {
+    # source: NULL/goodreads | kindle | amazon-print | manual; asin set = it's in the Kindle library
+    "books": {"asin": "TEXT", "source": "TEXT", "kindle_rank": "INTEGER"},
+    # owned is the raw Amazon ledger: one row per Kindle item (book_id links it into `books` once imported)
+    "owned": {"asin": "TEXT", "cover": "TEXT", "percent_read": "INTEGER", "origin": "TEXT",
+              "kindle_rank": "INTEGER", "first_seen_at": "TEXT", "resource_type": "TEXT", "read_at": "TEXT",
+              "book_id": "INTEGER"},
+    # stage: thinking | checking | enriching | done | error
+    "rec_runs": {"profile_mode": "TEXT", "effort": "TEXT", "batch_id": "TEXT", "served_model": "TEXT",
+                 "stage": "TEXT", "store_note": "TEXT", "n": "INTEGER", "verify": "INTEGER"},
+    # amazon_status: available | owned | not-found | NULL (not checked)
+    "recommendations": {"asin": "TEXT", "price": "TEXT", "ku": "INTEGER", "amazon_rating": "REAL",
+                        "amazon_reviews": "INTEGER", "amazon_status": "TEXT", "series": "TEXT"},
+}
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        for table, cols in MIGRATIONS.items():
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for col, typ in cols.items():
+                if col not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_owned_asin ON owned(asin) WHERE asin IS NOT NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_books_asin ON books(asin)")
+        # a run that was mid-flight when the server stopped will never finish
+        conn.execute("UPDATE rec_runs SET status='error', stage='error', error='Interrupted: the server restarted' "
+                     "WHERE status='running'")
 
 
 @contextmanager
