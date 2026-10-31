@@ -70,6 +70,7 @@
           <div class="seg wide" id="model-filter" role="tablist">
             <button type="button" data-f="suggested" class="active">Suggested</button>
             <button type="button" data-f="open">Open models</button>
+            <button type="button" data-f="free">Free</button>
             <button type="button" data-f="all">All</button>
           </div>
           <input id="model-search" type="search" placeholder="Search: deepseek, qwen, kimi, llama…" spellcheck="false" aria-label="Search models">
@@ -86,6 +87,8 @@
         <div class="opt-row">
           <label class="check-inline" title="Sets OpenRouter's data_collection: deny, so requests go only to providers that don't store or train on prompts.">
             <input type="checkbox" id="deny-training"> Skip providers that may store or train on prompts</label>
+          <label class="check-inline" title="Free models are run by providers that may keep prompts (here, your reading profile). They run only when this is on.">
+            <input type="checkbox" id="free-ok"> Allow free models</label>
         </div>
       </div>
     </details>

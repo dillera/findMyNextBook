@@ -16,6 +16,12 @@ export const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh"
 export const hasKey = () => !!store.setting("openrouter_key");
 /** Ask OpenRouter to route only to providers that don't store or train on prompts (provider.data_collection). */
 export const denyTraining = () => store.setting("deny_training", true) !== false;
+// Free models: OpenRouter picks one ("openrouter/free"), or any ":free" model. Their providers usually keep prompts, so
+// they run only once the reader has said that's fine ("Try it free", or the switch in Options); paid models keep the
+// strict default either way.
+export const FREE_MODEL = "openrouter/free";
+export const freeOK = () => store.setting("free_ok", false) === true;
+export const isFree = (id, info = null) => !!info?.free || id === FREE_MODEL || /:free$/.test(id || "");
 
 const headers = () => ({
   Authorization: `Bearer ${store.setting("openrouter_key")}`, "Content-Type": "application/json",
@@ -30,7 +36,7 @@ function normalise(m) {
   const arch = m.architecture || {};
   const r = m.reasoning;
   return {
-    id: m.id, name: (m.name || m.id).replace(/^[^:]{2,30}:\s+/, ""), vendor: m.id.replace(/^~/, "").split("/")[0], created: m.created || 0,
+    id: m.id, name: m.id === FREE_MODEL ? "Any free model" : (m.name || m.id).replace(/^[^:]{2,30}:\s+/, ""), vendor: m.id.replace(/^~/, "").split("/")[0], created: m.created || 0,
     context: m.context_length || m.top_provider?.context_length || null, max_out: m.top_provider?.max_completion_tokens || null,
     prompt_price: perM(m.pricing?.prompt), completion_price: perM(m.pricing?.completion),
     free: m.id.endsWith(":free") || (+m.pricing?.prompt === 0 && +m.pricing?.completion === 0),
@@ -93,7 +99,7 @@ export function buildRequest(messages, { model = DEFAULT_MODEL, effort = null, s
   if (e) body.reasoning = { effort: e };
   const provider = {};
   if (mode !== "text") provider.require_parameters = true; // only providers that honour response_format
-  if (denyTraining()) provider.data_collection = "deny";
+  if (isFree(model, info) ? !freeOK() : denyTraining()) provider.data_collection = "deny";
   if (Object.keys(provider).length) body.provider = provider;
   body.usage = { include: true }; // the reply then says what the request cost
   return { body, mode, effort: e };
@@ -126,9 +132,16 @@ export async function chat(messages, { model = DEFAULT_MODEL, effort = null, sch
       if (unsupported(r.status, msg) && i < modes.length - 1) continue; // try the next, looser way of asking
       if (r.status === 401) throw new Error("OpenRouter rejected the key. Reconnect in Settings.");
       if (r.status === 402) throw new Error("Your OpenRouter account is out of credit.");
-      if (r.status === 429) throw new Error(`${model} is rate-limited right now${info?.free ? " (free models allow only a few requests a minute)" : ""}. Try again shortly, or pick another model.`);
-      if (/data.?polic|data_collection/i.test(msg) || (r.status === 404 && denyTraining() && /No endpoints/i.test(msg)))
-        throw new Error(`No provider of ${model} promises not to store or train on your prompts. Pick another model, or turn off “Skip providers that may store or train on prompts” in Options.`);
+      const free = isFree(model, info);
+      if (r.status === 429 && free && /day|daily/i.test(msg))
+        throw new Error("That's today's free runs used up (a free OpenRouter account gets about 50 a day). They come back tomorrow. Buying $10 of OpenRouter credit raises it to 1,000 a day, or pick a paid model.");
+      if (r.status === 429) throw new Error(`${free ? "Free models allow about 20 requests a minute" : `${model} is rate-limited right now`}. Wait a moment and try again${free ? "" : ", or pick another model"}.`);
+      if (/data.?polic|data_collection/i.test(msg) || (r.status === 404 && /No endpoints/i.test(msg) && (free ? !freeOK() : denyTraining())))
+        throw new Error(free
+          ? "Free models run on providers that may keep your prompts. Turn on “Allow free models” in Options to use them, or pick a paid model."
+          : `No provider of ${model} promises not to store or train on your prompts. Pick another model, or turn off “Skip providers that may store or train on prompts” in Options.`);
+      if (r.status === 404 && free && /No endpoints/i.test(msg))
+        throw new Error("No free model is available for this request right now. Try again later, or pick a paid model.");
       throw new Error(`OpenRouter ${r.status}: ${msg}`);
     }
     const data = JSON.parse(text);
@@ -162,29 +175,31 @@ export async function disconnect() { await store.delSetting("openrouter_key"); a
 /* ---------- Sign in with OpenRouter (OAuth PKCE) ---------- */
 const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-export async function startSignIn() {
+/** free: the visitor came through "Try it free". OpenRouter's page signs them in, or up (no card needed). */
+export async function startSignIn({ free = false } = {}) {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
   sessionStorage.setItem("or_pkce", verifier);
   sessionStorage.setItem("or_return", location.hash || "#discover");
+  if (free) sessionStorage.setItem("or_free", "1"); else sessionStorage.removeItem("or_free");
   location.href = "https://openrouter.ai/auth?" + new URLSearchParams({
     callback_url: location.origin + location.pathname, code_challenge: challenge, code_challenge_method: "S256", key_label: "findMyNextBook",
   });
 }
 
-/** On page load: finish a sign-in if OpenRouter just sent us back with ?code=. Returns true when a key was saved. */
+/** On page load: finish a sign-in if OpenRouter just sent us back with ?code=. Returns {free} when a key was saved. */
 export async function finishSignIn() {
   const code = new URLSearchParams(location.search).get("code");
   if (!code) return false;
   const back = sessionStorage.getItem("or_return") || "#discover";
   history.replaceState(null, "", location.pathname + back); // the code leaves the address bar (and history) at once
-  const verifier = sessionStorage.getItem("or_pkce");
-  sessionStorage.removeItem("or_pkce"); sessionStorage.removeItem("or_return");
+  const verifier = sessionStorage.getItem("or_pkce"), free = sessionStorage.getItem("or_free") === "1";
+  sessionStorage.removeItem("or_pkce"); sessionStorage.removeItem("or_return"); sessionStorage.removeItem("or_free");
   if (!verifier) throw new Error("That sign-in started in another tab or expired. Try again.");
   const r = await net(`${BASE}/auth/keys`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, code_verifier: verifier, code_challenge_method: "S256" }) }, "Connect OpenRouter");
   if (!r.ok) throw new Error(`OpenRouter sign-in failed (${r.status}). Try again, or paste a key instead.`);
   const { key } = await r.json();
   await saveKey(key);
-  return true;
+  return { free };
 }

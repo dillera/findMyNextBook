@@ -99,7 +99,7 @@ function renderBanner() {
   let html = "";
   if (s.kindle_pending) html = `<span class="txt"><b>${plural(s.kindle_pending, "Kindle book")}</b> from your last import ${s.kindle_pending === 1 ? "isn't" : "aren't"} in your library yet.</span><button class="btn sm primary" data-wizard="review">Review</button>`;
   else if (!s.books) html = `<span class="txt"><b>Your library is empty.</b> Bring in your Kindle library, your Goodreads ratings, or both.</span><button class="btn sm primary" data-wizard>Import books</button>`;
-  else if (!s.key) html = `<span class="txt"><b>Connect OpenRouter to get picks.</b> You use your own account, and this browser talks to OpenRouter directly.</span><button class="btn sm primary" data-connect>Connect</button>`;
+  else if (!s.key) html = `<span class="txt"><b>Connect OpenRouter to get picks.</b> Use your own account, or try it free. This browser talks to OpenRouter directly.</span><button class="btn sm primary" data-connect>Connect</button>`;
   else if (!s.kindle_last_apply && chosenSources().includes("kindle")) html = `<span class="txt"><b>Your Kindle library isn't imported yet,</b> so picks may include books you already own.</span><button class="btn sm primary" data-wizard="kindle">Import from Amazon</button>`;
   el.innerHTML = html; el.hidden = !html;
 }
@@ -143,6 +143,7 @@ function loadDiscover() {
   $("#rec-effort").value = store.setting("last_effort", "");
   $("#rec-n").value = store.setting("last_n", 10);
   $("#deny-training").checked = llm.denyTraining();
+  $("#free-ok").checked = llm.freeOK();
   if (!modelsLoaded) { modelsLoaded = true; M.picked = [...store.setting("last_models", [llm.DEFAULT_MODEL])]; renderPicked(); loadModels(); }
   loadRuns();
 }
@@ -152,7 +153,7 @@ const MAX_MODELS = 6;
 const M = { all: [], byId: new Map(), filter: "suggested", search: "", sort: "price", picked: [], failed: null };
 const OPEN_FAMILIES = ["deepseek", "qwen", "moonshotai", "z-ai", "minimax", "mistralai", "meta", "meta-llama", "google", "openai", "nvidia", "xiaomi", "stepfun"];
 const SPECIALTY = /code|coder|safety|guard|embed|ocr|-mt|vision-exp|preview|omni|translat|-vl\b/i; // not general-purpose writers
-const EXTRA_SUGGESTED = ["typesafe/jev-router"];
+const EXTRA_SUGGESTED = ["typesafe/jev-router", "openrouter/free"];
 
 async function loadModels() {
   try {
@@ -195,25 +196,26 @@ function renderModels() {
   if (!M.all.length) return;
   const need = promptChars() / 3.8 + 8000; // the profile plus room to answer
   const q = M.search.toLowerCase().split(/\s+/).filter(Boolean);
-  let list = q.length ? (M.filter === "open" ? M.all.filter((m) => m.open) : M.all)
-    : M.filter === "suggested" ? suggestedModels(need) : M.filter === "open" ? M.all.filter((m) => m.open) : M.all;
+  const pool = { open: (m) => m.open, free: (m) => m.free }[M.filter];
+  let list = q.length ? (pool ? M.all.filter(pool) : M.all)
+    : M.filter === "suggested" ? suggestedModels(need) : pool ? M.all.filter(pool) : M.all;
   if (q.length) list = list.filter((m) => q.every((w) => `${m.id} ${m.name}`.toLowerCase().includes(w)));
   const cost = new Map(list.map((m) => [m.id, costOf(m)]));
-  // free providers usually keep prompts, so with "skip providers that store prompts" on they mostly can't serve: list them last
-  const freeLast = llm.denyTraining() ? (a, b) => a.free - b.free : () => 0;
+  // free models can't run until they're allowed (their providers usually keep prompts): until then, list them last
+  const freeLast = llm.freeOK() ? () => 0 : (a, b) => a.free - b.free;
   list = [...list].sort(M.sort === "new" ? (a, b) => b.created - a.created
     : (a, b) => freeLast(a, b) || (cost.get(a.id) ?? 1e9) - (cost.get(b.id) ?? 1e9) || b.created - a.created);
   const shown = list.slice(0, 120);
   box.innerHTML = shown.length ? shown.map((m) => {
     const small = m.context && m.context < need;
     const tags = [m.open && `<span class="mtag open" title="Open weights: the model is published on Hugging Face">open</span>`,
-      m.free && `<span class="mtag free" title="Free, but rate-limited; free providers often keep prompts">free</span>`,
+      m.free && `<span class="mtag free" title="Free: about 50 runs a day on a free account. Free providers may keep prompts.">free</span>`,
       m.reasoning && `<span class="mtag" title="Reasons before answering${m.reasoning.efforts.length ? `; efforts: ${m.reasoning.efforts.join(", ")}` : ""}">thinks</span>`].filter(Boolean).join("");
     const c = cost.get(m.id);
     const tip = small ? `Your profile is too big for its ${m.context.toLocaleString()}-token context` : `${m.context ? `${Math.round(m.context / 1000).toLocaleString()}k context` : ""}${m.structured ? "" : m.json_mode ? " · JSON mode" : " · plain-text JSON"}`;
     return `<label class="model-row${small ? " off" : ""}" title="${esc(tip)}"><input type="checkbox" value="${esc(m.id)}" ${M.picked.includes(m.id) ? "checked" : ""} ${small ? "disabled" : ""}>
       <span class="mr-main"><span class="nm">${esc(m.name)}</span>${tags}<span class="slug">${esc(m.id)}</span></span>
-      <span class="mr-cost"><b>${c == null ? "" : `≈ ${fmtCost(c)}`}</b><span>${m.free ? "rate-limited" : m.prompt_price == null ? "price varies" : `$${fmtPrice(m.prompt_price)} / $${fmtPrice(m.completion_price)} per M`}</span></span></label>`;
+      <span class="mr-cost"><b>${c == null ? "" : c === 0 ? "free" : `≈ ${fmtCost(c)}`}</b><span>${m.free ? (llm.freeOK() ? "≈50 runs a day" : "needs “Allow free models”") : m.prompt_price == null ? "price varies" : `$${fmtPrice(m.prompt_price)} / $${fmtPrice(m.completion_price)} per M`}</span></span></label>`;
   }).join("") + (list.length > shown.length ? `<p class="muted small mr-more">${(list.length - shown.length).toLocaleString()} more. Search to narrow it down.</p>` : "")
     : `<p class="muted small mr-more">No model matches “${esc(M.search)}”.</p>`;
 }
@@ -221,7 +223,7 @@ function renderModels() {
 function renderPicked() {
   $("#model-picked").innerHTML = M.picked.length ? M.picked.map((id) => {
     const m = M.byId.get(id), c = m ? costOf(m) : null;
-    return `<span class="pick-chip">${esc(modelName(id))}${c != null ? ` <span class="pc-cost">≈ ${fmtCost(c)}</span>` : ""}<button type="button" data-unpick="${esc(id)}" aria-label="Remove ${esc(modelName(id))}">×</button></span>`;
+    return `<span class="pick-chip">${esc(modelName(id))}${c != null ? ` <span class="pc-cost">${c === 0 ? "free" : `≈ ${fmtCost(c)}`}</span>` : ""}<button type="button" data-unpick="${esc(id)}" aria-label="Remove ${esc(modelName(id))}">×</button></span>`;
   }).join("") : `<span class="muted small">No model picked: ${esc(modelName(llm.DEFAULT_MODEL))} will be used.</span>`;
 }
 
@@ -250,7 +252,15 @@ $("#model-search").addEventListener("input", (e) => { M.search = e.target.value;
 $("#model-sort").addEventListener("change", (e) => { M.sort = e.target.value; renderModels(); });
 for (const id of ["#rec-effort", "#rec-n"]) $(id).addEventListener("change", () => { renderModels(); renderPicked(); });
 $("#deny-training").addEventListener("change", async (e) => { await store.setSetting("deny_training", e.target.checked); renderModels(); });
+$("#free-ok").addEventListener("change", async (e) => { await store.setSetting("free_ok", e.target.checked); renderModels(); });
 
+/** "Try it free": free models allowed, and picked, until the reader chooses otherwise. */
+async function useFreeModels() {
+  await store.setSetting("free_ok", true);
+  await store.setSetting("last_models", [llm.FREE_MODEL]);
+  M.picked = [llm.FREE_MODEL];
+  if (modelsLoaded) { $("#free-ok").checked = true; renderPicked(); renderModels(); }
+}
 const pickedModels = () => {
   const typed = $("#rec-model")?.value.trim();
   const list = M.failed && typed ? [typed] : M.picked;
@@ -635,7 +645,12 @@ function openSettings() { refresh(); renderSettings(); $("#wizard").hidden = tru
 function connectHTML() {
   return `<div class="connect-row"><button class="btn primary" data-signin>Sign in with OpenRouter</button></div>
     <div class="connect-row"><input type="password" id="or-key" placeholder="…or paste a key (sk-or-…)" autocomplete="off" spellcheck="false"><button class="btn" data-savekey>Save key</button></div>
-    <p class="muted small" style="margin:8px 0 0">Picks run on your own OpenRouter account. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>. It's stored only in this browser and sent only to openrouter.ai.</p>`;
+    <p class="muted small" style="margin:8px 0 0">Picks run on your own OpenRouter account. Get a key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/keys</a>. It's stored only in this browser and sent only to openrouter.ai.</p>
+    <div class="free-box">
+      <div class="fb-text"><b>No OpenRouter account? Try it free</b>
+        <span>Create a free account on OpenRouter (no card needed) and you're brought straight back here, connected. Picks then use OpenRouter's free models: about 50 runs a day. Free models are run by providers that may keep what's sent to them, which here is your reading profile. Paid models never do.</span></div>
+      <button class="btn" data-signin-free>Try it free</button>
+    </div>`;
 }
 function renderSettings() {
   const s = S.status;
@@ -656,7 +671,11 @@ function renderSettings() {
     <div class="set-row"><div class="txt"><b>Your data</b><span>${plural(s.books, "book")}, ${plural(s.runs, "recommendation run")}, all in this browser only. A backup is a file you keep; it never includes your keys.</span>
       <div class="data-actions"><button class="btn sm" data-backup>Download backup</button><label class="btn sm">Restore backup<input type="file" accept=".json" hidden data-restore></label>
       <button class="btn sm ghost danger" data-wipe>Delete everything</button></div></div></div>`;
-  if (s.key) llm.keyInfo().then((i) => { const u = $("#or-usage"); if (u) u.textContent = i.usage != null ? `Used $${(+i.usage).toFixed(2)}${i.limit ? ` of $${i.limit}` : ""} on this key.` : ""; }).catch(() => {});
+  if (s.key) llm.keyInfo().then((i) => {
+    const u = $("#or-usage"); if (!u) return;
+    const spent = i.usage != null ? `Used $${(+i.usage).toFixed(2)}${i.limit ? ` of $${i.limit}` : ""} on this key.` : "";
+    u.textContent = [spent, i.is_free_tier ? "Free account: free models only, about 50 runs a day." : "", llm.freeOK() ? "Free models allowed." : ""].filter(Boolean).join(" ");
+  }).catch(() => {});
   $("#set-goodreads").onchange = (e) => importFile(e.target, "goodreads").then(() => { refresh(); renderSettings(); }).catch(() => {});
   $("#set-enrich").onclick = () => { startEnrich(); renderSettings(); };
 }
@@ -676,6 +695,7 @@ document.addEventListener("click", async (e) => {
   const t = e.target;
   try {
     if (t.closest("[data-signin]")) { await llm.startSignIn(); }
+    else if (t.closest("[data-signin-free]")) { await llm.startSignIn({ free: true }); }
     else if (t.closest("[data-savekey]")) {
       const input = t.closest(".connect-row").querySelector("input");
       t.disabled = true;
@@ -736,7 +756,7 @@ function renderPrivacy() {
 
     <h3>What others see</h3>
     <ul class="small" style="color:var(--ink-2);padding-left:18px;margin:0;display:grid;gap:6px">
-      <li><b>OpenRouter</b>, and the provider it routes to for the model you picked, get your reading profile with your own key when you ask for picks. “View what gets sent” on Discover shows exactly what that is. With “Skip providers that may store or train on prompts” on (the default), OpenRouter uses only providers that don't.</li>
+      <li><b>OpenRouter</b>, and the provider it routes to for the model you picked, get your reading profile with your own key when you ask for picks. “View what gets sent” on Discover shows exactly what that is. With “Skip providers that may store or train on prompts” on (the default), OpenRouter uses only providers that don't. Free models are the exception: their providers may keep it, so they run only after you allow them (“Try it free” does).</li>
       <li><b>Google Books / Open Library</b> get one book title or ISBN per lookup, for covers, blurbs and genres. No cookies, no referrer.</li>
       <li><b>Amazon, Google, Open Library</b> serve cover images, so they see which covers your browser loads.</li>
       <li><b>${esc(host)}</b> sees that someone loaded the page (address and time), like any website, and nothing else. If you use “Sign in with OpenRouter”, the return address carries a one-time code that expires in minutes and is useless without a secret that never leaves this tab.</li>
@@ -1049,7 +1069,11 @@ function wzDone() {
     return;
   }
   await rec.markInterrupted();
-  try { if (await llm.finishSignIn()) toast("OpenRouter connected", 3500); }
+  try {
+    const done = await llm.finishSignIn();
+    if (done?.free) { await useFreeModels(); toast("You're connected, on free models: about 50 runs a day. Options lets you switch to a paid model any time.", 7000); }
+    else if (done) toast("OpenRouter connected", 3500);
+  }
   catch (err) { toast(err.message, 6000); }
   show(location.hash.slice(1) || "discover");
   if (!S.status.books && !S.status.kindle_ledger) openWizard();

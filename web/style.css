@@ -489,6 +489,13 @@ details.alt > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .connect-box h3 { font-size: 17px; margin-bottom: 6px; }
 .connect-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .connect-row input { flex: 1 1 220px; }
+.free-box { display: flex; gap: 14px; align-items: center; margin-top: 16px; padding: 14px 16px; border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px dashed var(--line-2); }
+.free-box .fb-text { flex: 1; min-width: 0; }
+.free-box .fb-text b { display: block; margin-bottom: 3px; }
+.free-box .fb-text span { font-size: 12.5px; color: var(--ink-2); }
+.free-box .btn { flex: none; }
+@media (max-width: 560px) { .free-box { flex-direction: column; align-items: stretch; } }
 .set-row .stack { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .set-row input[type=password], .set-row input[type=text] { width: 220px; }
 

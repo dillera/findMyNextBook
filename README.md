@@ -38,6 +38,10 @@ serves it (see *Deploy* below).
    5. **Done.** Connect OpenRouter and find your next book.
 2. **Connect OpenRouter** (Settings, or the wizard's last step): *Sign in with OpenRouter* (OAuth PKCE), or paste a key
    from openrouter.ai/keys. The key stays in this browser and goes only to openrouter.ai.
+   No account? **Try it free** sends you to OpenRouter's sign-up (no card needed) and back, connected, with picks set
+   to OpenRouter's free models (`openrouter/free`): about 50 runs a day, 1,000 once you've bought $10 of credit.
+   OpenRouter has no keyless access, so a free account is the floor. Free models' providers may keep prompts, so they
+   only run once allowed (*Try it free* does, or *Allow free models* in Options); paid models keep the strict default.
 3. **Discover.** Type a steer or pick a chip, and get picks with reasons that cite your history, a blurb and cover, and
    a Kindle-store link. *Options* picks the model(s): Claude, or any of OpenRouter's models, with the cheaper
    open-weight ones (DeepSeek, Qwen, Kimi, GLM, MiniMax, Llama, Mistral, Gemma…) one click away and an estimated cost
@@ -71,7 +75,8 @@ To check it yourself:
 - Read the code: it isn't minified or bundled, and "View source" on any file shows what runs.
 
 What others do see:
-- **OpenRouter**: your reading profile with your key, when you ask for picks.
+- **OpenRouter**: your reading profile with your key, when you ask for picks. Also the provider it routes to: paid models
+  go only to providers that don't store or train on prompts (unless you turn that off); free models may not.
 - **Google Books / Open Library**: one title or ISBN per lookup.
 - **Amazon / Google / Open Library image hosts**: which covers your browser loads.
 - **The hosting server**: that someone loaded the page (address, time). If you use *Sign in with OpenRouter*, the
