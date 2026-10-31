@@ -34,8 +34,11 @@ serves it (see *Deploy* below).
 2. **Connect OpenRouter** (Settings, or the wizard's last step): *Sign in with OpenRouter* (OAuth PKCE), or paste a key
    from openrouter.ai/keys. The key stays in this browser and goes only to openrouter.ai.
 3. **Discover.** Type a steer or pick a chip, and get picks with reasons that cite your history, a blurb and cover, and
-   a Kindle-store link. *Options* picks the model(s), reasoning effort and number of picks; *View what gets sent* shows
-   the exact request. Mark picks *Bought it*, *Want to read*, *Read it* or *Not for me*; all four feed the next run.
+   a Kindle-store link. *Options* picks the model(s): Claude, or any of OpenRouter's models, with the cheaper
+   open-weight ones (DeepSeek, Qwen, Kimi, GLM, MiniMax, Llama, Mistral, Gemma…) one click away and an estimated cost
+   per run for each. Pick up to six to compare their picks. Also there: reasoning effort (mapped to the nearest level
+   each model supports), the number of picks, and *Skip providers that may store or train on prompts* (on by
+   default; OpenRouter's `data_collection: deny`). *View what gets sent* shows the exact request. Mark picks *Bought it*, *Want to read*, *Read it* or *Not for me*; all four feed the next run.
 4. **Library** and **Insights** work like a Goodreads you own: shelves, stars, notes, search, stats.
 5. **Settings → Your data**: download a backup file, restore one, or delete everything. Backups never include keys.
 

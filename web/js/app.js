@@ -142,27 +142,119 @@ function loadDiscover() {
   refresh();
   $("#rec-effort").value = store.setting("last_effort", "");
   $("#rec-n").value = store.setting("last_n", 10);
-  if (!modelsLoaded) { modelsLoaded = true; loadModels().catch((e) => ($("#model-grid").innerHTML = `<span class="muted small">Couldn't load the model list (${esc(e.message)}). Type a slug below.</span>`)); }
+  $("#deny-training").checked = llm.denyTraining();
+  if (!modelsLoaded) { modelsLoaded = true; M.picked = [...store.setting("last_models", [llm.DEFAULT_MODEL])]; renderPicked(); loadModels(); }
   loadRuns();
 }
+
+/* model picker: Suggested (a few Claude + the newest model of each open-weight family), Open models, All */
+const MAX_MODELS = 6;
+const M = { all: [], byId: new Map(), filter: "suggested", search: "", sort: "price", picked: [], failed: null };
+const OPEN_FAMILIES = ["deepseek", "qwen", "moonshotai", "z-ai", "minimax", "mistralai", "meta", "meta-llama", "google", "openai", "nvidia", "xiaomi", "stepfun"];
+const SPECIALTY = /code|coder|safety|guard|embed|ocr|-mt|vision-exp|preview|omni|translat|-vl\b/i; // not general-purpose writers
+const EXTRA_SUGGESTED = ["typesafe/jev-router"];
+
 async function loadModels() {
-  const picked = new Set(store.setting("last_models", [llm.DEFAULT_MODEL]));
-  const [anthropic, all] = await Promise.all([llm.listModels("anthropic"), llm.listModels()]);
-  const claude = [...anthropic, ...all.filter((m) => m.id === "typesafe/jev-router")];
-  all.forEach((m) => (modelNames[m.id] = (m.name || m.id).replace(/^Anthropic:\s*/, "")));
-  const price = (m) => (m.prompt_price != null ? `$${m.prompt_price} / $${m.completion_price} per M` : "");
-  $("#model-grid").innerHTML = claude.map((m) => `
-    <label class="model-opt"><input type="checkbox" value="${esc(m.id)}" ${picked.has(m.id) ? "checked" : ""}>
-      <span><span class="nm">${esc(modelName(m.id))}</span><br>
-      <span class="px">${m.id.includes("router") ? "picks the model per request" : price(m)}${m.effort || m.id.includes("router") ? "" : " · no effort control"}</span></span></label>`).join("");
-  const custom = [...picked].filter((id) => !claude.some((m) => m.id === id));
-  if (custom.length && !$("#rec-model").value) $("#rec-model").value = custom[0];
-  $("#model-list").innerHTML = all.map((m) => `<option value="${esc(m.id)}">`).join("");
+  try {
+    M.all = await llm.listModels();
+    M.byId = new Map(M.all.map((m) => [m.id, m]));
+    M.all.forEach((m) => (modelNames[m.id] = m.name));
+    M.failed = null;
+  } catch (e) { M.failed = e.message; }
+  renderModels(); renderPicked();
   if (S.run && !$("#results").hidden) showRun(S.run.id);
 }
+
+let promptCache = { key: null, chars: 0 };
+function promptChars() {
+  const n = Math.max(3, Math.min(25, +$("#rec-n").value || 10));
+  const key = `${n}|${store.all("books").length}|${store.all("kindle").length}|${store.all("runs").length}`;
+  if (promptCache.key !== key) promptCache = { key, chars: rec.SYSTEM.length + rec.promptFor(n, null).length + 1500 /* schema */ };
+  return promptCache.chars;
+}
+const fmtCost = (c) => (c == null ? "" : c === 0 ? "free" : c < 0.001 ? "<0.1¢" : c < 0.01 ? `${(c * 100).toFixed(1)}¢` : c < 1 ? `${Math.round(c * 100)}¢` : `$${c.toFixed(2)}`);
+const fmtPrice = (p) => (p == null ? "?" : p === 0 ? "0" : p < 0.1 ? p.toFixed(3).replace(/0+$/, "") : p < 10 ? p.toFixed(2).replace(/\.?0+$/, "") : Math.round(p));
+const costOf = (m) => rec.estimateCost(m, promptChars(), Math.max(3, +$("#rec-n").value || 10), $("#rec-effort").value || null);
+
+function suggestedModels(need) {
+  const fits = (m) => !m.context || m.context >= need;
+  const claude = M.all.filter((m) => m.vendor === "anthropic" && !m.id.startsWith("~")).sort((a, b) => b.created - a.created).slice(0, 3);
+  const open = OPEN_FAMILIES.map((f) => M.all.filter((m) => m.vendor === f && m.open && !m.free && !m.id.startsWith("~") && (m.structured || m.json_mode)
+    && !SPECIALTY.test(m.id) && fits(m)).sort((a, b) => b.created - a.created)[0]).filter(Boolean);
+  const ids = new Set([...claude, ...open].map((m) => m.id).concat(llm.DEFAULT_MODEL, EXTRA_SUGGESTED));
+  return M.all.filter((m) => ids.has(m.id));
+}
+
+function renderModels() {
+  const box = $("#model-list");
+  if (M.failed) {
+    box.innerHTML = `<p class="muted small" style="margin:0 0 8px">Couldn't load the model list from OpenRouter (${esc(M.failed)}). Type a model ID instead:</p>
+      <input id="rec-model" placeholder="e.g. deepseek/deepseek-v4.1-flash" spellcheck="false" style="width:100%" value="${esc(M.picked[0] || "")}">`;
+    return;
+  }
+  if (!M.all.length) return;
+  const need = promptChars() / 3.8 + 8000; // the profile plus room to answer
+  const q = M.search.toLowerCase().split(/\s+/).filter(Boolean);
+  let list = q.length ? (M.filter === "open" ? M.all.filter((m) => m.open) : M.all)
+    : M.filter === "suggested" ? suggestedModels(need) : M.filter === "open" ? M.all.filter((m) => m.open) : M.all;
+  if (q.length) list = list.filter((m) => q.every((w) => `${m.id} ${m.name}`.toLowerCase().includes(w)));
+  const cost = new Map(list.map((m) => [m.id, costOf(m)]));
+  // free providers usually keep prompts, so with "skip providers that store prompts" on they mostly can't serve: list them last
+  const freeLast = llm.denyTraining() ? (a, b) => a.free - b.free : () => 0;
+  list = [...list].sort(M.sort === "new" ? (a, b) => b.created - a.created
+    : (a, b) => freeLast(a, b) || (cost.get(a.id) ?? 1e9) - (cost.get(b.id) ?? 1e9) || b.created - a.created);
+  const shown = list.slice(0, 120);
+  box.innerHTML = shown.length ? shown.map((m) => {
+    const small = m.context && m.context < need;
+    const tags = [m.open && `<span class="mtag open" title="Open weights: the model is published on Hugging Face">open</span>`,
+      m.free && `<span class="mtag free" title="Free, but rate-limited; free providers often keep prompts">free</span>`,
+      m.reasoning && `<span class="mtag" title="Reasons before answering${m.reasoning.efforts.length ? `; efforts: ${m.reasoning.efforts.join(", ")}` : ""}">thinks</span>`].filter(Boolean).join("");
+    const c = cost.get(m.id);
+    const tip = small ? `Your profile is too big for its ${m.context.toLocaleString()}-token context` : `${m.context ? `${Math.round(m.context / 1000).toLocaleString()}k context` : ""}${m.structured ? "" : m.json_mode ? " · JSON mode" : " · plain-text JSON"}`;
+    return `<label class="model-row${small ? " off" : ""}" title="${esc(tip)}"><input type="checkbox" value="${esc(m.id)}" ${M.picked.includes(m.id) ? "checked" : ""} ${small ? "disabled" : ""}>
+      <span class="mr-main"><span class="nm">${esc(m.name)}</span>${tags}<span class="slug">${esc(m.id)}</span></span>
+      <span class="mr-cost"><b>${c == null ? "" : `≈ ${fmtCost(c)}`}</b><span>${m.free ? "rate-limited" : m.prompt_price == null ? "price varies" : `$${fmtPrice(m.prompt_price)} / $${fmtPrice(m.completion_price)} per M`}</span></span></label>`;
+  }).join("") + (list.length > shown.length ? `<p class="muted small mr-more">${(list.length - shown.length).toLocaleString()} more. Search to narrow it down.</p>` : "")
+    : `<p class="muted small mr-more">No model matches “${esc(M.search)}”.</p>`;
+}
+
+function renderPicked() {
+  $("#model-picked").innerHTML = M.picked.length ? M.picked.map((id) => {
+    const m = M.byId.get(id), c = m ? costOf(m) : null;
+    return `<span class="pick-chip">${esc(modelName(id))}${c != null ? ` <span class="pc-cost">≈ ${fmtCost(c)}</span>` : ""}<button type="button" data-unpick="${esc(id)}" aria-label="Remove ${esc(modelName(id))}">×</button></span>`;
+  }).join("") : `<span class="muted small">No model picked: ${esc(modelName(llm.DEFAULT_MODEL))} will be used.</span>`;
+}
+
+function setPicked(list) {
+  M.picked = list;
+  store.setSetting("last_models", list.length ? list : [llm.DEFAULT_MODEL]);
+  renderPicked();
+}
+$("#model-list").addEventListener("change", (e) => {
+  const box = e.target.closest("input[type=checkbox]"); if (!box) return;
+  if (box.checked && M.picked.length >= MAX_MODELS) { box.checked = false; toast(`Pick at most ${MAX_MODELS} models`); return; }
+  setPicked(box.checked ? [...M.picked, box.value] : M.picked.filter((x) => x !== box.value));
+});
+$("#model-picked").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-unpick]"); if (!b) return;
+  setPicked(M.picked.filter((x) => x !== b.dataset.unpick));
+  const box = $$("#model-list input").find((i) => i.value === b.dataset.unpick); if (box) box.checked = false;
+});
+$("#model-filter").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-f]"); if (!b) return;
+  M.filter = b.dataset.f;
+  $$("#model-filter button").forEach((x) => x.classList.toggle("active", x === b));
+  renderModels();
+});
+$("#model-search").addEventListener("input", (e) => { M.search = e.target.value; renderModels(); });
+$("#model-sort").addEventListener("change", (e) => { M.sort = e.target.value; renderModels(); });
+for (const id of ["#rec-effort", "#rec-n"]) $(id).addEventListener("change", () => { renderModels(); renderPicked(); });
+$("#deny-training").addEventListener("change", async (e) => { await store.setSetting("deny_training", e.target.checked); renderModels(); });
+
 const pickedModels = () => {
-  const list = [...$$("#model-grid input:checked").map((i) => i.value), $("#rec-model").value.trim()].filter(Boolean);
-  return list.length ? list : store.setting("last_models", [llm.DEFAULT_MODEL]);
+  const typed = $("#rec-model")?.value.trim();
+  const list = M.failed && typed ? [typed] : M.picked;
+  return list.length ? list : [llm.DEFAULT_MODEL];
 };
 
 $$("#mood-chips .chip").forEach((c) => c.addEventListener("click", () => {
@@ -203,7 +295,7 @@ function renderProgress(runs) {
   $("#progress").innerHTML = runs.filter(Boolean).map((r) => {
     const idx = r.status === "done" ? 3 : Math.max(0, STAGES.findIndex(([k]) => k === r.stage));
     const label = r.status === "error" ? "failed" : r.status === "done" ? "done" : mmss((Date.now() - parseUTC(r.created_at)) / 1000);
-    return `<div class="prog-row"><div class="prog-model"><span>${esc(modelName(r.model))}${r.effort ? ` · ${esc(r.effort)} effort` : ""}</span><span class="t">${label}</span></div>
+    return `<div class="prog-row"><div class="prog-model"><span>${esc(modelName(r.model))}${(r.effort_used ?? r.effort) ? ` · ${esc((r.effort_used ?? r.effort) === "none" ? "no reasoning" : `${r.effort_used ?? r.effort} effort`)}` : ""}</span><span class="t">${label}</span></div>
       <ol class="stages three">${STAGES.map(([, name], i) => `<li class="${i < idx ? "done" : i === idx && r.status === "running" ? "active" : ""}">${name}</li>`).join("")}</ol>
       ${r.status === "error" ? `<div class="prog-err">${esc(r.error)}</div>` : ""}</div>`;
   }).join("") + (runs.some((r) => r?.status === "running" && r.stage === "thinking") ? `<p class="muted small" style="margin:14px 0 0">Your browser is talking to OpenRouter directly. Bigger models at high effort can take a few minutes; keep this tab open.</p>` : "");
@@ -245,7 +337,7 @@ function showRun(id) {
   $("#model-tabs").hidden = group.length < 2;
   $("#model-tabs").innerHTML = group.map((r) => `<button class="chip ${r.id === id ? "active" : ""}" data-run="${r.id}">${esc(modelName(r.model))}${r.status === "error" ? " · failed" : ""}</button>`).join("");
   const served = run.served_model && run.served_model !== run.model ? ` → ${modelName(run.served_model)}` : "";
-  $("#results-meta").textContent = [`${modelName(run.model)}${served}`, when(run.created_at), run.mood && `“${run.mood}”`].filter(Boolean).join(" · ");
+  $("#results-meta").textContent = [`${modelName(run.model)}${served}`, when(run.created_at), run.cost != null && `cost ${fmtCost(run.cost) || "$0"}`, run.mood && `“${run.mood}”`].filter(Boolean).join(" · ");
   const taste = $("#taste");
   taste.hidden = !run.taste_summary && !run.error;
   taste.innerHTML = run.error ? `<span class="who">This run failed</span>${esc(run.error)}`
@@ -310,10 +402,14 @@ $("#recs").addEventListener("click", async (e) => {
   refresh();
 });
 $("#rec-prompt").addEventListener("click", () => {
+  const model = pickedModels()[0], info = M.byId.get(model) || null;
   const user = rec.promptFor(Math.max(3, +$("#rec-n").value || 10), $("#mood").value.trim() || null);
-  $("#modal-title").textContent = `What gets sent · ≈${Math.round((user.length + rec.SYSTEM.length) / 4).toLocaleString()} tokens`;
-  $("#modal-note").textContent = "This is the whole request your browser sends to OpenRouter (with your key) when you ask for picks. It goes to openrouter.ai and nowhere else.";
-  $("#modal-pre").textContent = `SYSTEM\n${rec.SYSTEM}\n\nUSER\n${user}`;
+  const { body } = llm.buildRequest([{ role: "system", content: rec.SYSTEM }, { role: "user", content: user }],
+    { model, effort: $("#rec-effort").value || null, schema: rec.SCHEMA, info });
+  const { messages, ...settings } = body;
+  $("#modal-title").textContent = `What gets sent · ≈${Math.round((user.length + rec.SYSTEM.length) / 3.8).toLocaleString()} tokens`;
+  $("#modal-note").textContent = `This is the whole request your browser sends to OpenRouter (with your key) for ${modelName(model)}${M.picked.length > 1 ? " (each model you picked gets the same, adapted to what it supports)" : ""}. It goes to openrouter.ai and nowhere else.`;
+  $("#modal-pre").textContent = `SETTINGS\n${JSON.stringify(settings, null, 2)}\n\nSYSTEM\n${messages[0].content}\n\nUSER\n${messages[1].content}`;
   openOverlay("#modal");
 });
 
@@ -640,7 +736,7 @@ function renderPrivacy() {
 
     <h3>What others see</h3>
     <ul class="small" style="color:var(--ink-2);padding-left:18px;margin:0;display:grid;gap:6px">
-      <li><b>OpenRouter</b> gets your reading profile with your own key when you ask for picks. “View what gets sent” on Discover shows exactly what that is.</li>
+      <li><b>OpenRouter</b>, and the provider it routes to for the model you picked, get your reading profile with your own key when you ask for picks. “View what gets sent” on Discover shows exactly what that is. With “Skip providers that may store or train on prompts” on (the default), OpenRouter uses only providers that don't.</li>
       <li><b>Google Books / Open Library</b> get one book title or ISBN per lookup, for covers, blurbs and genres. No cookies, no referrer.</li>
       <li><b>Amazon, Google, Open Library</b> serve cover images, so they see which covers your browser loads.</li>
       <li><b>${esc(host)}</b> sees that someone loaded the page (address and time), like any website, and nothing else. If you use “Sign in with OpenRouter”, the return address carries a one-time code that expires in minutes and is useless without a secret that never leaves this tab.</li>

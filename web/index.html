@@ -64,17 +64,28 @@
     <details class="options" id="options">
       <summary>Options</summary>
       <div class="options-body">
-        <p class="opt-label">Model</p>
-        <div id="model-grid" class="model-grid"><span class="muted small">Loading models from OpenRouter…</span></div>
-        <div class="opt-row">
-          <label class="grow">Other OpenRouter model <input id="rec-model" list="model-list" placeholder="any slug, e.g. google/gemini-3-pro" spellcheck="false"></label>
-          <datalist id="model-list"></datalist>
+        <p class="opt-label">Models <span class="opt-hint">pick up to 6 to compare their picks</span></p>
+        <div id="model-picked" class="model-picked"></div>
+        <div class="mb-bar">
+          <div class="seg wide" id="model-filter" role="tablist">
+            <button type="button" data-f="suggested" class="active">Suggested</button>
+            <button type="button" data-f="open">Open models</button>
+            <button type="button" data-f="all">All</button>
+          </div>
+          <input id="model-search" type="search" placeholder="Search: deepseek, qwen, kimi, llama…" spellcheck="false" aria-label="Search models">
+          <select id="model-sort" aria-label="Sort models"><option value="price">Cheapest first</option><option value="new">Newest first</option></select>
         </div>
+        <div id="model-list" class="model-list"><span class="muted small">Loading models from OpenRouter…</span></div>
+        <p class="opt-foot" id="model-foot">Cost is an estimate for one run with your library, from OpenRouter's list prices. Open models publish their weights, and are usually far cheaper.</p>
         <div class="opt-row">
-          <label title="How long the model reasons before answering. Higher is slower and costs more.">Effort
-            <select id="rec-effort"><option value="">model default</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label>
+          <label title="How long the model reasons before answering. Higher is slower and costs more. Each model gets the nearest level it supports.">Effort
+            <select id="rec-effort"><option value="">model default</option><option value="none">off</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option></select></label>
           <label>Picks <input id="rec-n" type="number" min="3" max="25" value="10"></label>
           <button id="rec-prompt" class="btn sm ghost" type="button">View what gets sent</button>
+        </div>
+        <div class="opt-row">
+          <label class="check-inline" title="Sets OpenRouter's data_collection: deny, so requests go only to providers that don't store or train on prompts.">
+            <input type="checkbox" id="deny-training"> Skip providers that may store or train on prompts</label>
         </div>
       </div>
     </details>

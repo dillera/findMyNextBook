@@ -140,13 +140,44 @@ main { max-width: 1240px; margin: 0 auto; padding: 0 24px 80px; }
 .options[open] > summary::after { content: " ▴"; }
 .options-body { margin-top: 14px; padding: 18px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--line); }
 .opt-label { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
-.model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
-.model-opt { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
-  cursor: pointer; font-size: 13px; background: var(--bg); }
-.model-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-.model-opt input { margin-top: 3px; accent-color: var(--accent); }
-.model-opt .nm { font-weight: 600; }
-.model-opt .px { font-size: 11.5px; color: var(--muted); }
+.opt-hint { font-weight: 400; letter-spacing: 0; text-transform: none; margin-left: 6px; }
+.opt-foot { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+/* model picker */
+.model-picked { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; min-height: 30px; align-items: center; }
+.pick-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 12px; border-radius: 999px; font-size: 13px;
+  font-weight: 600; background: var(--accent-soft); border: 1px solid var(--accent); color: var(--ink); }
+.pick-chip .pc-cost { font-weight: 400; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.pick-chip button { width: 22px; height: 22px; border-radius: 50%; border: 0; background: transparent; color: var(--ink-2); cursor: pointer; font-size: 15px; line-height: 1; }
+.pick-chip button:hover { background: var(--surface); color: var(--ink); }
+.mb-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.mb-bar input[type=search] { flex: 1 1 200px; min-width: 0; }
+/* .seg.wide: the text version of the Library's icon toggle (.seg, further down) */
+.seg.wide { padding: 3px; background: var(--surface-2); border-color: var(--line); }
+.seg.wide button { width: auto; height: 28px; padding: 0 12px; color: var(--ink-2); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.seg.wide button.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.model-list { max-height: 340px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); padding: 4px; }
+.model-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 7px; cursor: pointer; font-size: 13px; }
+.model-row:hover { background: var(--surface-2); }
+.model-row:has(input:checked) { background: var(--accent-soft); }
+.model-row.off { opacity: .45; cursor: not-allowed; }
+.model-row input { accent-color: var(--accent); margin: 0; }
+.mr-main { min-width: 0; }
+.mr-main .nm { font-weight: 600; margin-right: 6px; }
+.mr-main .slug { display: block; font: 11.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mtag { display: inline-block; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px; margin-right: 4px; border-radius: 999px;
+  border: 1px solid var(--line-2); color: var(--ink-2); vertical-align: 1px; }
+.mtag.open { border-color: color-mix(in oklab, var(--accent) 50%, transparent); color: var(--accent); }
+.mtag.free { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.mr-cost { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mr-cost b { display: block; font-weight: 600; }
+.mr-cost span { font-size: 11px; color: var(--muted); }
+.mr-more { margin: 8px 10px; }
+label.check-inline input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+@media (max-width: 560px) {
+  .mr-cost span { display: none; }
+  .seg.wide { width: 100%; }
+  .seg.wide button { flex: 1; padding: 0 6px; }
+}
 .opt-row { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: center; margin-top: 16px; }
 .opt-row label { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
 .opt-row input[type=number] { width: 68px; }

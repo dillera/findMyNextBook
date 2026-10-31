@@ -3,7 +3,7 @@
 import * as store from "./store.js";
 import { isKnown, keyOf, knownSet, stripSeries } from "./match.js";
 import { lookup } from "./books-api.js";
-import { chat } from "./llm.js";
+import { chat, effortFor, parseJSON } from "./llm.js";
 
 export const kindleSearch = (t, a) => `https://www.amazon.com/s?k=${encodeURIComponent(`${t} ${a || ""}`.trim())}&i=digital-text`;
 
@@ -154,7 +154,7 @@ Rules:
 - Make each reason specific: name the books in their history that make this a match, and say what the shared quality is.
 - Set confidence to a value from 0 to 1.`;
 
-const SCHEMA = {
+export const SCHEMA = {
   type: "object", additionalProperties: false, required: ["taste_summary", "recommendations"],
   properties: {
     taste_summary: { type: "string", description: "2-3 sentence portrait of the reader" },
@@ -176,6 +176,20 @@ export function promptFor(n, mood) {
   return user;
 }
 
+// rough output per run: the taste summary plus ~170 tokens per pick, and what reasoning tends to add at each effort
+const THINK = { minimal: 500, low: 1500, medium: 4000, high: 8000, xhigh: 16000, max: 24000 };
+/** Estimated cost in dollars of one run on this model, or null when the model has no listed price.
+ *  promptChars: length of the system + user prompt (≈3.8 characters per token for English). */
+export function estimateCost(info, promptChars, n, effort) {
+  if (!info || info.prompt_price == null || info.completion_price == null) return null;
+  if (info.free) return 0;
+  const inTok = promptChars / 3.8, outTok = 250 + (n + OVERASK) * 170;
+  const used = effortFor(effort, info);
+  const thinks = info.reasoning && used !== "none" && (used || info.reasoning.mandatory || info.reasoning.default_on);
+  const think = thinks ? THINK[used] || THINK.medium : 0;
+  return (inTok * info.prompt_price + (outTok + think) * info.completion_price) / 1e6;
+}
+
 /** One run, start to finish. onUpdate(run) fires on every stage change. */
 export async function runRecommendation({ model, mood = null, n = 10, effort = null, batchId = null }, onUpdate = () => {}) {
   const user = promptFor(n, mood);
@@ -184,11 +198,16 @@ export async function runRecommendation({ model, mood = null, n = 10, effort = n
   const save = async (patch) => { Object.assign(run, patch); await store.put("runs", run); onUpdate(run); };
   onUpdate(run);
   try {
-    const { content, served } = await chat([{ role: "system", content: SYSTEM }, { role: "user", content: user }], { model, effort, schema: SCHEMA });
-    const data = JSON.parse((content.match(/\{[\s\S]*\}/) || [content])[0]);
+    const reply = await chat([{ role: "system", content: SYSTEM }, { role: "user", content: user }], { model, effort, schema: SCHEMA });
+    let data;
+    try { data = parseJSON(reply.content); } catch { throw new Error(`${model} didn't answer in the expected format. Try again, or pick another model.`); }
+    if (!Array.isArray(data.recommendations) || !data.recommendations.length) throw new Error(`${model} returned no recommendations. Try again, or pick another model.`);
+    await save({ effort_used: reply.effort, mode: reply.mode, cost: reply.cost, tokens: reply.tokens });
+    const served = reply.served;
     const known = knownSet(store.all("books"), store.all("kindle"));
     const kept = [], dropped = [];
-    for (const r of data.recommendations || []) {
+    for (const r of data.recommendations) {
+      if (!r || typeof r.title !== "string" || !r.title.trim()) continue;
       if (isKnown(r.title || "", r.author, known)) dropped.push({ title: r.title, author: r.author, why: "already in your library" });
       else kept.push(r);
     }
