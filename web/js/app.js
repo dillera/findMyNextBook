@@ -98,9 +98,9 @@ function renderBanner() {
   const s = S.status, el = $("#banner");
   let html = "";
   if (s.kindle_pending) html = `<span class="txt"><b>${plural(s.kindle_pending, "Kindle book")}</b> from your last import ${s.kindle_pending === 1 ? "isn't" : "aren't"} in your library yet.</span><button class="btn sm primary" data-wizard="review">Review</button>`;
-  else if (!s.books) html = `<span class="txt"><b>Your library is empty.</b> Import the books you've bought on Amazon to get started.</span><button class="btn sm primary" data-wizard>Import books</button>`;
+  else if (!s.books) html = `<span class="txt"><b>Your library is empty.</b> Bring in your Kindle library, your Goodreads ratings, or both.</span><button class="btn sm primary" data-wizard>Import books</button>`;
   else if (!s.key) html = `<span class="txt"><b>Connect OpenRouter to get picks.</b> You use your own account, and this browser talks to OpenRouter directly.</span><button class="btn sm primary" data-connect>Connect</button>`;
-  else if (!s.kindle_last_apply) html = `<span class="txt"><b>Your Kindle library isn't imported yet,</b> so picks may include books you already own.</span><button class="btn sm primary" data-wizard>Import from Amazon</button>`;
+  else if (!s.kindle_last_apply && chosenSources().includes("kindle")) html = `<span class="txt"><b>Your Kindle library isn't imported yet,</b> so picks may include books you already own.</span><button class="btn sm primary" data-wizard="kindle">Import from Amazon</button>`;
   el.innerHTML = html; el.hidden = !html;
 }
 function renderBgPill() {
@@ -646,7 +646,7 @@ function renderSettings() {
               : `<span>Not connected. Recommendations need your own OpenRouter account.</span>${connectHTML()}`}</div>
       ${s.key ? `<button class="btn sm danger" data-disconnect>Disconnect</button>` : ""}</div>
     <div class="set-row"><div class="txt"><b>Kindle library</b><span>${s.kindle_ledger ? `${plural(s.kindle_ledger, "book")} · imported ${ago(s.kindle_last_sync)}` : "Not imported yet"}</span></div>
-      <button class="btn sm" data-wizard>${s.kindle_ledger ? "Import again" : "Import"}</button></div>
+      <button class="btn sm" data-wizard="kindle">${s.kindle_ledger ? "Import again" : "Import"}</button></div>
     <div class="set-row"><div class="txt"><b>Goodreads</b><span>${s.goodreads ? `${plural(s.goodreads, "book")} from your Goodreads export` : "Ratings and read dates from a Goodreads export"}</span></div>
       <label class="btn sm">Import CSV<input type="file" accept=".csv" hidden id="set-goodreads"></label></div>
     <div class="set-row"><div class="txt"><b>Book details</b><span>Covers, blurbs and genres for ${s.enriched.toLocaleString()} of ${plural(s.books, "book")}${gb.progress.running ? ` · fetching ${gb.progress.done}/${gb.progress.total}` : ""}</span></div>
@@ -768,8 +768,23 @@ function renderHosts() {
 /* ================================================================================================
    IMPORT WIZARD
    ================================================================================================ */
-const WZ = { step: "kindle", opts: { include_samples: false, toread_as_read: true }, toRate: [], shown: 0, rated: 0 };
-const WZ_STEPS = ["kindle", "review", "rate", "done"];
+const WZ = { step: "sources", sources: [], opts: { include_samples: false, toread_as_read: true }, toRate: [], shown: 0, rated: 0 };
+const STEP_LABELS = { sources: "Sources", kindle: "Kindle", goodreads: "Goodreads", review: "Review", rate: "Rate", done: "Done" };
+const SOURCES = ["kindle", "goodreads"];
+/** What this reader uses: what they picked in the wizard, else whatever they've imported. */
+function chosenSources() {
+  const saved = store.setting("sources");
+  if (Array.isArray(saved)) return saved;
+  const s = S.status || computeStatus();
+  return SOURCES.filter((k) => (k === "kindle" ? s.kindle_ledger : s.goodreads));
+}
+// Goodreads before the Kindle review, so Kindle books are matched against your Goodreads ratings instead of added twice
+function wzSteps() {
+  const k = WZ.sources.includes("kindle"), g = WZ.sources.includes("goodreads");
+  return ["sources", ...(k ? ["kindle"] : []), ...(g ? ["goodreads"] : []), ...(k || S.status?.kindle_pending ? ["review"] : []), "rate", "done"];
+}
+const wzNext = () => { const st = wzSteps(); wzGo(st[st.indexOf(WZ.step) + 1] || "done"); };
+const wzBack = () => { const st = wzSteps(); wzGo(st[Math.max(0, st.indexOf(WZ.step) - 1)]); };
 $("#open-import").addEventListener("click", () => openWizard());
 $("#wz-script").textContent = exportSource();
 $("#bookmarklet").href = bookmarklet();
@@ -781,31 +796,62 @@ $("#wz-copy").addEventListener("click", async () => {
 
 function openWizard(step) {
   refresh();
+  WZ.sources = [...chosenSources()];
   $("#settings").hidden = true;
   openOverlay("#wizard");
-  wzGo(step || (S.status.kindle_pending ? "review" : "kindle"));
+  wzGo(step || (S.status.kindle_pending ? "review" : "sources"));
 }
 function wzGo(step) {
+  if (SOURCES.includes(step) && !WZ.sources.includes(step)) WZ.sources.push(step); // e.g. Settings → Kindle → Import
   WZ.step = step;
-  const i = WZ_STEPS.indexOf(step);
-  $$("#wz-steps li").forEach((li, j) => { li.classList.toggle("active", j === i); li.classList.toggle("done", j < i); });
+  const steps = wzSteps(), i = steps.indexOf(step);
+  $("#wz-steps").innerHTML = steps.map((st, j) => `<li class="${j === i ? "active" : j < i ? "done" : ""}"><span class="dot">${j < i ? "✓" : j + 1}</span><span class="lbl">${STEP_LABELS[st]}</span></li>`).join("");
   $$("[data-panel]").forEach((p) => (p.hidden = p.dataset.panel !== step));
   $("#wizard .sheet-body").scrollTop = 0;
-  ({ kindle: wzKindle, review: wzReview, rate: wzRate, done: wzDone })[step]();
+  ({ sources: wzSources, kindle: wzKindle, goodreads: wzGoodreads, review: wzReview, rate: wzRate, done: wzDone })[step]();
 }
 const wzFoot = (left, right) => ($("#wz-foot").innerHTML = `${left || ""}<span class="spacer"></span>${right || ""}`);
-$("#wz-foot").addEventListener("click", (e) => { const b = e.target.closest("[data-go]"); if (b) wzGo(b.dataset.go); });
+$("#wz-foot").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-go]"); if (!b) return;
+  if (b.dataset.go === "next") wzNext(); else if (b.dataset.go === "back") wzBack(); else wzGo(b.dataset.go);
+});
+const BACK = `<button class="btn ghost" data-go="back">← Back</button>`;
+
+/* step: sources */
+function wzSources() {
+  const s = refresh();
+  const status = {
+    kindle: s.kindle_ledger ? `✓ ${plural(s.kindle_ledger, "book")}, imported ${ago(s.kindle_last_sync)}` : "",
+    goodreads: s.goodreads ? `✓ ${plural(s.goodreads, "book")}${store.setting("goodreads_last_import") ? `, imported ${ago(store.setting("goodreads_last_import"))}` : ""}` : "",
+  };
+  for (const box of $$("#wz-sources input")) box.checked = WZ.sources.includes(box.value);
+  for (const el of $$("#wz-sources [data-status]")) el.textContent = status[el.dataset.status];
+  wzSourcesFoot();
+}
+const wzSourcesFoot = () => wzFoot(`<button class="btn ghost" data-close>Close</button>`,
+  `<button class="btn primary" data-go="next" ${WZ.sources.length ? "" : "disabled"}>${WZ.sources.length ? "Continue" : "Pick at least one"}</button>`);
+$("#wz-sources").addEventListener("change", async (e) => {
+  WZ.sources = SOURCES.filter((k) => $(`#wz-sources input[value="${k}"]`).checked);
+  await store.setSetting("sources", WZ.sources);
+  wzGo("sources");
+  renderBanner();
+});
 
 /* step 1: Kindle */
 function wzKindle() {
   const s = refresh();
   $("#wz-kindle-status").innerHTML = s.kindle_ledger
     ? `<div class="sync-box ok"><span class="big-check">✓</span><div class="msg"><b>${plural(s.kindle_ledger, "Kindle book")} imported</b><span class="muted small">Last imported ${ago(s.kindle_last_sync)}. Paste a fresh export to pick up new purchases.</span></div></div>` : "";
-  wzFoot(`<button class="btn ghost" data-close>Close</button>`,
-    s.kindle_ledger ? `<button class="btn primary" data-go="review">Continue</button>` : `<button class="btn ghost" data-go="review">Skip: I'll add Goodreads or paper books</button>`);
+  wzFoot(BACK, s.kindle_ledger ? `<button class="btn primary" data-go="next">Continue</button>` : `<button class="btn ghost" data-go="next">Skip Kindle for now</button>`);
 }
 async function handleKindleText(text, statusEl) {
   try {
+    if (/^\uFEFF?\s*"?Book Id"?,/.test(text)) { // a Goodreads export dropped in the Kindle box: import it as one
+      const r = await imp.importGoodreads(text);
+      if (!WZ.sources.includes("goodreads")) { WZ.sources.push("goodreads"); await store.setSetting("sources", WZ.sources); }
+      toast(`That was your Goodreads export. ${goodreadsResult(r)}`, 4500); startEnrich(); refresh();
+      return;
+    }
     const { kind, items } = imp.parseKindleExport(text);
     if (kind === "finished") {
       const r = await imp.saveKindleFinished(items);
@@ -818,7 +864,7 @@ async function handleKindleText(text, statusEl) {
     toast(`${plural(r.fetched, "Kindle book")} read${r.added && r.added !== r.fetched ? `, ${r.added} new` : ""}`);
     refresh();
     await sleep(400);
-    wzGo("review");
+    wzNext();
   } catch (err) {
     if (statusEl) { statusEl.className = "res err"; statusEl.textContent = err.message; } else toast(err.message, 5000);
   }
@@ -836,13 +882,57 @@ for (const d of [zone, $("#drop-finished")]) {
 }
 $(".mini-paste").addEventListener("paste", (e) => { const t = e.clipboardData.getData("text"); if (t) { e.preventDefault(); handleKindleText(t, $(".res", $("#drop-finished"))); } });
 
-/* step 2: review */
+/* step: Goodreads */
+function wzGoodreads(result) {
+  const s = refresh();
+  const gr = store.all("books").filter((b) => b.goodreads_id);
+  const read = gr.filter((b) => b.exclusive_shelf === "read").length, rated = gr.filter((b) => b.my_rating > 0).length,
+    want = gr.filter((b) => b.exclusive_shelf === "to-read").length;
+  const kindleNote = WZ.sources.includes("kindle") && s.kindle_ledger
+    ? ` Next, your ${plural(s.kindle_ledger, "Kindle book")} ${s.kindle_ledger === 1 ? "is" : "are"} matched against them.` : "";
+  $("#wz-gr-status").innerHTML = gr.length ? `<div class="sync-box ok"><span class="big-check">✓</span><div class="msg">
+      <b>${plural(gr.length, "Goodreads book")}: ${read.toLocaleString()} read, ${rated.toLocaleString()} rated${want ? `, ${want.toLocaleString()} want to read` : ""}</b>
+      <span class="muted small">${result ? `${goodreadsResult(result)}.` : `${store.setting("goodreads_last_import") ? `Imported ${ago(store.setting("goodreads_last_import"))}. ` : ""}Drop a fresh export to update.`}${kindleNote}</span></div></div>` : "";
+  const onKindle = WZ.sources.includes("kindle") && s.kindle_ledger ? imp.kindleBookIds() : new Set();
+  const stale = imp.staleReading().filter((b) => b.goodreads_id && !b.asin && !onKindle.has(b.id)); // Kindle ones count as read anyway
+  if (stale.length) $("#wz-gr-status").insertAdjacentHTML("beforeend", `<div class="choice-list" style="margin-top:12px"><label class="check">
+      <input type="checkbox" id="gr-stale" ${WZ.opts.stale_as_read ? "checked" : ""}>
+      <span>Count ${plural(stale.length, "book")} stuck on “currently reading” as read<span class="note">On that shelf for over three months with no finish date, like ${stale.slice(0, 3).map((b) => `<i>${esc(b.title)}</i>`).join(", ")}. ${onKindle.size ? " Kindle books are counted as read anyway." : ""} Leave this unticked if you really are still reading them.</span></span></label></div>`);
+  $("#gr-zone-text").innerHTML = gr.length ? "Drop a newer <b>goodreads_library_export.csv</b> here to update" : "Drop <b>goodreads_library_export.csv</b> here, or click to choose it";
+  wzFoot(BACK, gr.length ? `<button class="btn primary" id="wz-gr-next">Continue</button>` : `<button class="btn ghost" data-go="next">Skip Goodreads for now</button>`);
+  if (gr.length) $("#wz-gr-next").onclick = async () => {
+    if (WZ.opts.stale_as_read && stale.length) toast(`${plural(await imp.markRead(stale), "book")} moved to read`);
+    refresh(); wzNext();
+  };
+}
+$("#wz-gr-status").addEventListener("change", (e) => { if (e.target.id === "gr-stale") WZ.opts.stale_as_read = e.target.checked; });
+{
+  const zone = $("#gr-zone"), input = $("#gr-file");
+  const handle = async (file) => {
+    if (!file) return;
+    $("#gr-zone-text").innerHTML = `<span class="spinner"></span> Opening ${esc(file.name)}…`;
+    try {
+      const r = await imp.importGoodreads(await file.text());
+      startEnrich();
+      wzGoodreads(r);
+    } catch (err) {
+      wzGoodreads();
+      $("#wz-gr-status").innerHTML = `<div class="sync-box err"><div class="msg"><b>That file didn't work</b><span class="small">${esc(err.message)}</span></div></div>`;
+    }
+  };
+  input.addEventListener("change", () => { handle(input.files[0]); input.value = ""; });
+  zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+  zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); handle(e.dataTransfer.files[0]); });
+}
+
+/* step: review */
 function wzReview() {
   const p = imp.kindlePreview(WZ.opts);
   const kindle = p.total - p.skipped - p.editions, fresh = p.new + p.flip;
   $("#wz-review-title").textContent = kindle ? `${plural(kindle, "book")} on your Kindle` : "Nothing imported from Kindle yet";
-  $("#wz-review-lead").textContent = !kindle ? "Go back to bring in your Kindle library, or add a Goodreads export or your paper-book orders below."
-    : !fresh ? "Everything on your Kindle is already in your library. Add finish dates, Goodreads or paper books below, or carry on."
+  $("#wz-review-lead").textContent = !kindle ? "Go back to bring in your Kindle library, or add your paper-book orders below."
+    : !fresh ? "Everything on your Kindle is already in your library. Add finish dates or paper books below, or carry on."
     : `${p.new ? `${plural(p.new, "new book")} will be added as read` : "No new books"}${p.matched ? `, and ${p.matched.toLocaleString()} already in your library get their Kindle covers` : ""}. Ratings stay as they are.${p.editions ? ` ${plural(p.editions, "second edition")} (omnibus and single copies of the same book) ${p.editions === 1 ? "is" : "are"} folded in.` : ""}${p.with_dates ? ` Kindle knows when you finished ${p.with_dates} of the new ones.` : ""}`;
   $("#wz-review-stats").innerHTML = kindle ? [[kindle, "on your Kindle"], [p.matched, "already in your library"], [p.new, "new to your library", true],
     ...(p.samples ? [[p.samples, p.samples === 1 ? "free sample" : "free samples"]] : [])]
@@ -853,7 +943,7 @@ function wzReview() {
   const flipNames = p.flip_books.slice(0, 4).map((b) => `<i>${esc(b.title)}</i>`).join(", ") + (p.flip > 4 ? ` and ${p.flip - 4} more` : "");
   const choices = [];
   if (p.flip || !WZ.opts.toread_as_read) choices.push(`<label class="check"><input type="checkbox" data-opt="toread_as_read" ${WZ.opts.toread_as_read ? "checked" : ""}>
-      <span>Count Kindle books on my want-to-read shelf as read${p.flip ? ` (${p.flip})` : ""}<span class="note">${p.flip ? flipNames : "Bought on Kindle means read."}</span></span></label>`);
+      <span>Count Kindle books on my want-to-read or currently-reading shelves as read${p.flip ? ` (${p.flip})` : ""}<span class="note">${p.flip ? flipNames : "Bought on Kindle means read."}</span></span></label>`);
   if (p.samples) choices.push(`<label class="check"><input type="checkbox" data-opt="include_samples" ${WZ.opts.include_samples ? "checked" : ""}>
       <span>Include ${plural(p.samples, "free sample")}<span class="note">Left out by default: you downloaded them but didn't buy them.</span></span></label>`);
   $("#wz-choices").innerHTML = choices.join("");
@@ -862,7 +952,7 @@ function wzReview() {
   const finRes = $(".res", $("#drop-finished"));
   if (fin && !finRes.textContent) finRes.textContent = `✓ Finish dates imported ${ago(fin)}`;
   const label = fresh ? `Add ${plural(p.new || p.flip, "book")} to my library` : "Continue";
-  wzFoot(`<button class="btn ghost" data-go="kindle">← Back</button>`, `<button class="btn primary" id="wz-apply">${label}</button>`);
+  wzFoot(BACK, `<button class="btn primary" id="wz-apply">${label}</button>`);
   $("#wz-apply").onclick = async (e) => {
     e.target.disabled = true; e.target.textContent = "Adding…";
     try {
@@ -871,12 +961,12 @@ function wzReview() {
         if (r.added || r.flipped) toast(`${plural(r.added, "book")} added${r.flipped ? `, ${r.flipped} moved to read` : ""}`);
         startEnrich();
       }
-      refresh(); wzGo("rate");
+      refresh(); wzNext();
     } catch (err) { toast(err.message, 5000); e.target.disabled = false; e.target.textContent = label; }
   };
 }
 $("#wz-choices").addEventListener("change", (e) => { const o = e.target.dataset.opt; if (o) { WZ.opts[o] = e.target.checked; wzReview(); } });
-for (const d of [$("#drop-goodreads"), $("#drop-orders")]) {
+for (const d of [$("#drop-orders")]) {
   const input = $("input[type=file]", d), res = $(".res", d);
   const handle = async (file) => {
     if (!file) return;
@@ -898,17 +988,18 @@ for (const d of [$("#drop-goodreads"), $("#drop-orders")]) {
 /* step 3: rate */
 function wzRate() {
   WZ.toRate = store.all("books").filter((b) => b.exclusive_shelf === "read" && !b.my_rating)
-    .sort((a, b) => (a.kindle_rank ?? 1e9) - (b.kindle_rank ?? 1e9) || (b.date_read || "").localeCompare(a.date_read || "") || b.id - a.id);
+    .sort((a, b) => (a.kindle_rank ?? 1e9) - (b.kindle_rank ?? 1e9) || (b.date_read || "").localeCompare(a.date_read || "")
+      || (b.date_added || "").localeCompare(a.date_added || "") || b.id - a.id);
   WZ.shown = 0; WZ.rated = 0;
   const total = WZ.toRate.length;
   $("#wz-rate-lead").textContent = total
-    ? `${plural(total, "book")} ${total === 1 ? "is" : "are"} read but unrated, newest Kindle purchase first. A 5★ or a 1★ tells the recommender far more than a 3★. Skip any you don't remember.`
+    ? `${plural(total, "book")} ${total === 1 ? "is" : "are"} read but unrated, ${WZ.toRate.some((b) => b.kindle_rank != null) ? "newest Kindle purchase" : "most recent"} first. A 5★ or a 1★ tells the recommender far more than a 3★. Skip any you don't remember.`
     : "Every book you've read has a rating. Nothing to do here.";
   $("#wz-rate").innerHTML = "";
   wzMoreToRate();
   wzRateFoot();
 }
-const wzRateFoot = () => wzFoot(`<button class="btn ghost" data-go="review">← Back</button><span class="rated-count">${WZ.rated ? `${plural(WZ.rated, "book")} rated` : ""}</span>`,
+const wzRateFoot = () => wzFoot(`${BACK}<span class="rated-count">${WZ.rated ? `${plural(WZ.rated, "book")} rated` : ""}</span>`,
   `<button class="btn primary" data-go="done">${WZ.rated ? "Continue" : "Skip for now"}</button>`);
 function wzMoreToRate() {
   const next = WZ.toRate.slice(WZ.shown, WZ.shown + 24);
@@ -940,7 +1031,7 @@ $("#wz-rate").addEventListener("click", async (e) => {
 function wzDone() {
   const s = refresh();
   $("#wz-done-lead").textContent = gb.progress.running ? "Covers, blurbs and genres are still filling in. Your picks can start now." : "Everything's in. Time to find your next book.";
-  $("#wz-done-stats").innerHTML = [[s.books, "books in your library"], [s.rated, "rated"], [s.on_kindle, "on your Kindle"]]
+  $("#wz-done-stats").innerHTML = [[s.books, "books in your library"], [s.shelves.read || 0, "read"], [s.rated, "rated"], ...(s.on_kindle ? [[s.on_kindle, "on your Kindle"]] : [])]
     .map(([v, l]) => `<div class="stat"><div class="v">${(v || 0).toLocaleString()}</div><div class="l">${l}</div></div>`).join("");
   const box = $("#wz-connect");
   box.hidden = s.key;
@@ -961,6 +1052,6 @@ function wzDone() {
   try { if (await llm.finishSignIn()) toast("OpenRouter connected", 3500); }
   catch (err) { toast(err.message, 6000); }
   show(location.hash.slice(1) || "discover");
-  if (!S.status.books && !S.status.kindle_ledger) openWizard("kindle");
+  if (!S.status.books && !S.status.kindle_ledger) openWizard();
   startEnrich();
 })();

@@ -153,17 +153,28 @@
 <div id="wizard" class="overlay" hidden>
   <div class="sheet wz" role="dialog" aria-modal="true" aria-label="Import your books">
     <header class="sheet-head">
-      <ol class="steps" id="wz-steps">
-        <li data-step="kindle"><span class="dot">1</span><span class="lbl">Kindle library</span></li>
-        <li data-step="review"><span class="dot">2</span><span class="lbl">Review</span></li>
-        <li data-step="rate"><span class="dot">3</span><span class="lbl">Rate</span></li>
-        <li data-step="done"><span class="dot">4</span><span class="lbl">Done</span></li>
-      </ol>
+      <ol class="steps" id="wz-steps"></ol>
       <button class="icon-btn" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button>
     </header>
     <div class="sheet-body">
-      <!-- step 1 -->
-      <section data-panel="kindle">
+      <!-- sources -->
+      <section data-panel="sources">
+        <h2 class="title">Where are your books?</h2>
+        <p class="lead">Pick everything you use. The more of your reading history comes in, the sharper the picks. Each one is read right here in your browser; nothing is uploaded.</p>
+        <div class="source-grid" id="wz-sources">
+          <label class="source-card"><input type="checkbox" value="kindle">
+            <span class="sc-head"><svg><use href="#i-book"/></svg><b>Kindle</b><span class="sc-tick" aria-hidden="true">✓</span></span>
+            <span class="d">Every ebook you've bought on Amazon. Bought on Kindle counts as read.</span>
+            <span class="sc-status" data-status="kindle"></span></label>
+          <label class="source-card"><input type="checkbox" value="goodreads">
+            <span class="sc-head"><span class="sc-star" aria-hidden="true">★</span><b>Goodreads</b><span class="sc-tick" aria-hidden="true">✓</span></span>
+            <span class="d">Your ratings, shelves and read dates, including paper books and anything not bought on Kindle.</span>
+            <span class="sc-status" data-status="goodreads"></span></label>
+        </div>
+        <p class="muted small" style="margin:14px 0 0">Using both? Kindle shows what you own and Goodreads what you thought of it. They're matched up for you, so nothing comes in twice.</p>
+      </section>
+      <!-- Kindle -->
+      <section data-panel="kindle" hidden>
         <h2 class="title">Bring in every book you've bought on Amazon</h2>
         <p class="lead">A small script reads your Kindle library on Amazon's own site, in your browser, signed in as you. You paste the result here. Amazon never talks to this site, and this site's server never sees your books.</p>
         <ol class="how">
@@ -187,7 +198,22 @@
           <div class="alt-body">It runs on Amazon's page and makes two kinds of request, both to Amazon itself: the list of your Kindle books (on read.amazon.com) or the dates Kindle saw you finish them (on amazon.com). It puts the result on your clipboard and offers it as a download. It sends nothing anywhere else. The full source is the code under “browser console” above.</div>
         </details>
       </section>
-      <!-- step 2 -->
+      <!-- Goodreads -->
+      <section data-panel="goodreads" hidden>
+        <h2 class="title">Bring in your Goodreads ratings</h2>
+        <p class="lead">Your stars, shelves and read dates are the strongest taste signal there is. Goodreads has no way to share them with other apps, so you download your export and drop it here. It's opened in this browser and never uploaded.</p>
+        <ol class="how">
+          <li><b>Ask for your export</b><span>Open <a href="https://www.goodreads.com/review/import" target="_blank" rel="noopener noreferrer">goodreads.com/review/import</a>, signed in, and click <i>Export Library</i>.</span></li>
+          <li><b>Download it</b><span>After a moment a link appears under the button: <i>Your export from …</i>. Click it to download <code>goodreads_library_export.csv</code>. Reload the page if it doesn't show up.</span></li>
+          <li><b>Drop it here</b><span>Drag the file into the box below, or click the box to choose it.</span></li>
+        </ol>
+        <label class="paste-zone file-zone" id="gr-zone">
+          <input type="file" accept=".csv,text/csv" hidden id="gr-file">
+          <span class="fz-text" id="gr-zone-text">Drop <b>goodreads_library_export.csv</b> here, or click to choose it</span>
+        </label>
+        <div id="wz-gr-status"></div>
+      </section>
+      <!-- review -->
       <section data-panel="review" hidden>
         <h2 class="title" id="wz-review-title"></h2>
         <p class="lead" id="wz-review-lead"></p>
@@ -202,19 +228,13 @@
         </div>
         <div class="wz-section">
           <h3>Add more (optional)</h3>
-          <div class="extra-grid three">
+          <div class="extra-grid">
             <div class="drop" id="drop-finished" tabindex="0">
               <b>When you finished each book</b>
               <span class="d">Click the same bookmark on any <a href="https://www.amazon.com/kindle/reading/insights" target="_blank" rel="noopener">amazon.com</a> page, then paste here.</span>
               <textarea class="mini-paste" data-kind="finished" placeholder="Paste here"></textarea>
               <span class="res"></span>
             </div>
-            <label class="drop" id="drop-goodreads">
-              <b>Goodreads export</b>
-              <span class="d">Your ratings and read dates, the strongest taste signal. Goodreads → My Books → Import and export.</span>
-              <input type="file" accept=".csv" hidden data-kind="goodreads">
-              <span class="res"></span>
-            </label>
             <label class="drop" id="drop-orders">
               <b>Paper books from Amazon</b>
               <span class="d">Amazon → Account → Request Your Data → “Your Orders”. Drop the zip or its order CSV here.</span>
@@ -225,14 +245,14 @@
           <p class="muted small" style="margin:10px 0 0">Files are opened right here in your browser. They're never uploaded.</p>
         </div>
       </section>
-      <!-- step 3 -->
+      <!-- rate -->
       <section data-panel="rate" hidden>
         <h2 class="title">Rate what you've read</h2>
         <p class="lead" id="wz-rate-lead"></p>
         <div class="rate-grid" id="wz-rate"></div>
         <div class="center" style="margin-top:22px"><button class="btn" id="wz-more" type="button" hidden>Show more</button></div>
       </section>
-      <!-- step 4 -->
+      <!-- done -->
       <section data-panel="done" hidden class="center">
         <div class="done-mark">✓</div>
         <h2 class="title">Your library is ready</h2>

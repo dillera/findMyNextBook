@@ -20,17 +20,22 @@ serves it (see *Deploy* below).
 
 ## Using it
 
-1. **Import books** (top right) opens a four-step wizard:
-   1. **Kindle library.** Drag the *📚 Kindle → findMyNextBook* button to your bookmarks bar, open
+1. **Import books** (top right) opens a wizard. First, **Sources**: tick Kindle, Goodreads, or both. The steps that
+   follow are only the ones you need.
+   1. **Kindle.** Drag the *📚 Kindle → findMyNextBook* button to your bookmarks bar, open
       read.amazon.com/kindle-library, and click it. It reads your Kindle library on Amazon's own site, signed in as
       you, and copies it. Paste it into the wizard, or drop the file it offers. No bookmarks bar? The same script can be
       pasted into the browser console.
-   2. **Review.** Kindle books are matched to what's already there by ASIN, then title + author. Every Kindle purchase
-      counts as read (Amazon reports no reading progress). Optional extras, all opened locally: the finish dates Kindle
-      recorded (click the same bookmark on any amazon.com page), a Goodreads export (ratings and read dates), and paper
-      books from Amazon's *Request Your Data → Your Orders* zip.
-   3. **Rate** the read-but-unrated books with one click each. Strong opinions sharpen the picks most.
-   4. **Done.** Connect OpenRouter and find your next book.
+   2. **Goodreads.** Export your library at goodreads.com/review/import (*Export Library*, then the *Your export from …*
+      link) and drop `goodreads_library_export.csv` in. Ratings, shelves and read dates come in; nothing is uploaded.
+      Books that have sat on *currently reading* for months can be counted as read, if you tick that.
+   3. **Review** (with Kindle). Kindle books are matched to your Goodreads books by ASIN, then title + author, so
+      nothing comes in twice and your ratings stay. Every Kindle purchase counts as read (Amazon reports no reading
+      progress), including ones Goodreads still has on want-to-read or currently-reading. Optional extras, opened
+      locally: the finish dates Kindle recorded (click the same bookmark on any amazon.com page) and paper books from
+      Amazon's *Request Your Data → Your Orders* zip.
+   4. **Rate** the read-but-unrated books with one click each. Strong opinions sharpen the picks most.
+   5. **Done.** Connect OpenRouter and find your next book.
 2. **Connect OpenRouter** (Settings, or the wizard's last step): *Sign in with OpenRouter* (OAuth PKCE), or paste a key
    from openrouter.ai/keys. The key stays in this browser and goes only to openrouter.ai.
 3. **Discover.** Type a steer or pick a chip, and get picks with reasons that cite your history, a blurb and cover, and

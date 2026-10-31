@@ -79,7 +79,22 @@ export function importGoodreads(text) {
     if (b.goodreads_id) byGr.set(b.goodreads_id, b);
     writes.push(b);
   }
-  return store.putMany("books", writes).then(() => ({ inserted, updated, merged }));
+  return store.putMany("books", writes).then(() => store.setSetting("goodreads_last_import", ts)).then(() => ({ inserted, updated, merged }));
+}
+
+/** Ids of library books that a Kindle purchase matches (and that a Kindle apply will therefore count as read). */
+export const kindleBookIds = () => new Set(plan({ include_samples: true }).filter((x) => x.b && !x.b.pending).map((x) => x.b.id));
+
+/** Books that have sat on "currently reading" for over three months with no finish date: usually finished, never marked. */
+export function staleReading(days = 90) {
+  const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  return store.all("books").filter((b) => b.exclusive_shelf === "currently-reading" && !b.date_read && (b.date_added || "") < cutoff);
+}
+export async function markRead(books) {
+  const ts = store.now();
+  for (const b of books) Object.assign(b, { exclusive_shelf: "read", edited: true, updated_at: ts }); // edited: a re-import won't undo it
+  await store.putMany("books", books);
+  return books.length;
 }
 
 /* ---------- Kindle (data produced by kindle-export.js on Amazon's own pages) ---------- */
@@ -137,9 +152,11 @@ export async function saveKindleFinished(items) {
 }
 
 // an old link (or an ASIN stamped on a book by an earlier, looser matcher) is only trusted when the titles agree
+// Bought on Kindle means read, whichever of these shelves Goodreads still has it on
+const UNREAD = new Set(["to-read", "currently-reading"]);
 const agree = (a, b) => { const x = keyOf(a.title, a.author), y = keyOf(b.title, b.author); return (!x.sur || !y.sur || x.sur === y.sur) && sameTitle(x, y); };
 
-/** For each ledger item: link (to a book), flip (link + to-read→read), new, or skip (a sample). */
+/** For each ledger item: link (to a book), flip (link + want-to-read / currently-reading → read), new, or skip (a sample). */
 function plan({ include_samples = false, toread_as_read = true } = {}) {
   const idx = new BookIndex(store.all("books"));
   const out = [];
@@ -150,7 +167,7 @@ function plan({ include_samples = false, toread_as_read = true } = {}) {
     let b = linked || idx.find(r.title, r.author, { asin: r.asin });
     if (b && !b.pending && !agree(r, b)) b = idx.find(r.title, r.author);
     if (b?.pending) out.push({ kind: "edition", r, b }); // another edition of a book this same import adds
-    else if (b) out.push({ kind: toread_as_read && b.exclusive_shelf === "to-read" ? "flip" : "link", r, b });
+    else if (b) out.push({ kind: toread_as_read && UNREAD.has(b.exclusive_shelf) ? "flip" : "link", r, b });
     else {
       // a second edition of the same book later in the list should link to this one, not duplicate it
       const pending = { id: `pending-${r.asin}`, title: r.title, author: r.author, asin: r.asin, exclusive_shelf: "read", pending: r };
